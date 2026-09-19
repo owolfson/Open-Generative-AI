@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>ogai-local</Name>
+  <Repository>ogai-local:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <MyMAC/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/owolfson/Open-Generative-AI</Support>
+  <Project>https://github.com/owolfson/Open-Generative-AI</Project>
+  <ReadMe/>
+  <Overview>Local inference + agent API (REST, SSE, MCP) for the Open-Generative-AI fork. Runs upstream's local-model engines on the GPUs behind the GPU arbiter; GPU jobs stay disabled until OGAI_GPU_ENABLED=1.</Overview>
+  <Category>MediaApp:Other AI:</Category>
+  <WebUI>http://[IP]:[PORT:8790]/health</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/openai.svg</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="API Port" Target="8790" Default="8790" Mode="tcp" Description="REST / SSE / MCP" Type="Port" Display="always" Required="true" Mask="false">8790</Config>
+  <Config Name="AppData" Target="/data" Default="/mnt/user/appdata/open-generative-ai" Mode="rw" Description="Models, outputs, Muapi key file" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/open-generative-ai</Config>
+  <Config Name="API Token" Target="OGAI_TOKEN" Default="" Mode="" Description="Bearer token required by every endpoint except /health (deploy.sh generates one in AppData/.mcp-token)" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="GPU Arbiter URL" Target="OGAI_ARBITER_URL" Default="" Mode="" Description="gpu-arbiter base URL; V100 jobs are refused without it" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Enable GPU jobs" Target="OGAI_GPU_ENABLED" Default="0" Mode="" Description="1 = allow GPU jobs. Keep 0 until a GPU test window is approved." Type="Variable" Display="always" Required="false" Mask="false">0</Config>
+</Container>
