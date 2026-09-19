@@ -2075,6 +2075,7 @@ docker run -d --name "$NAME" --restart unless-stopped -p "$PORT:8790" -v "$DATA:
   -e OGAI_GPU_ENABLED="${OGAI_GPU_ENABLED:-0}" \
   -e TZ="${TZ:-America/New_York}" \
   -l net.unraid.docker.managed=dockerman \
+  -l "net.unraid.docker.icon=${OGAI_LOCAL_ICON:-https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/openai.svg}" \
   -l 'net.unraid.docker.webui=http://[IP]:[PORT:8790]/health' \
   "$IMG" >/dev/null
 
