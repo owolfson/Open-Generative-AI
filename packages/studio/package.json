@@ -8,6 +8,7 @@
     ".": "./src/index.js",
     "./package.json": "./package.json",
     "./dist/tailwind.css": "./dist/tailwind.css",
+    "./src/models.js": "./src/models.js",
     "./ImageStudio": "./src/components/ImageStudio.jsx",
     "./VideoStudio": "./src/components/VideoStudio.jsx",
     "./AudioStudio": "./src/components/AudioStudio.jsx",
