@@ -83,7 +83,9 @@ if ! git merge --no-edit -q main; then
 fi
 
 say "building candidate"
-./custom/build.sh open-generative-ai:candidate || fail "image build failed on merged upstream" build-failed
+OGAI_ASSUME_CLEAN=1 ./custom/build.sh open-generative-ai:candidate || fail "image build failed on merged upstream" build-failed
+# Evidence trail: a 2026-09-19 run labelled a clean tree "-dirty" and the cause was never found.
+[ -z "$(git status --porcelain)" ] || say "WARN: tree dirty after build: $(git status --porcelain | head -5 | tr '\n' ';')"
 
 say "smoke-testing candidate on scratch container"
 docker rm -f ogai-smoke >/dev/null 2>&1 || true
