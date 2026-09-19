@@ -60,8 +60,13 @@ git fetch upstream --prune -q || fail "fetch from upstream failed" error
 git checkout -q main && git merge --ff-only -q upstream/main || { git checkout -q owen; fail "main is not a fast-forward of upstream" error; }
 git checkout -q owen
 
-if git merge-base --is-ancestor main owen && [ "$FORCE" = 0 ]; then
-  finish noop "already contains upstream $(git rev-parse --short main)" 0
+# Nothing to do only if owen already has upstream AND, for --deploy, the live image already IS owen's HEAD.
+# (Checking the image label too means our own unshipped commits get deployed, and a --check run can
+# never leave the branch ahead of what is actually running.)
+deployed=$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' Open-Generative-AI 2>/dev/null || true)
+if [ "$FORCE" = 0 ] && git merge-base --is-ancestor main owen \
+   && { [ "$MODE" = --check ] || [ "$deployed" = "$(git rev-parse --short=9 owen)" ]; }; then
+  finish noop "already contains upstream $(git rev-parse --short main)${deployed:+, live image $deployed}" 0
 fi
 
 # Merge on a scratch branch so a conflict or failed build leaves 'owen' untouched.
@@ -98,9 +103,15 @@ if [ "$MODE" = --deploy ]; then
   fi
 fi
 
-git checkout -q owen && git merge --ff-only -q owen-sync && git branch -D owen-sync >/dev/null
+# Only a deploy adopts the merge: owen must never be ahead of what is validated AND running.
+# In --check mode the EXIT trap discards the scratch branch.
+if [ "$MODE" = --deploy ]; then
+  git checkout -q owen && git merge --ff-only -q owen-sync && git branch -D owen-sync >/dev/null
+else
+  say "--check: owen not advanced (run --deploy to adopt)"
+fi
 
-if [ "$PUSH" = 1 ]; then
+if [ "$PUSH" = 1 ] && [ "$MODE" = --deploy ]; then
   say "pushing to fork"
   # OGAI_GH_TOKEN_CMD prints a GitHub token (on Owen's box: docker exec agent-reach gh auth token).
   # It goes to git via env so it never lands in .git/config.
