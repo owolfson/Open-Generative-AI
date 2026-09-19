@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Open-Generative-AI</Name>
+  <Repository>open-generative-ai:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <MyMAC/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/owolfson/Open-Generative-AI</Support>
+  <Project>https://github.com/owolfson/Open-Generative-AI</Project>
+  <ReadMe/>
+  <Overview>Open Generative AI (owolfson fork of Anil-matcha/Open-Generative-AI). Image, video, lip-sync, cinema, workflow and agent studios over the Muapi.ai cloud API, plus local model providers. Build with custom/build.sh, deploy with custom/deploy.sh.</Overview>
+  <Category>MediaApp:Other AI:</Category>
+  <WebUI>http://[IP]:[PORT:3000]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/openai.svg</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI Port" Target="3000" Default="3002" Mode="tcp" Description="Next.js web UI" Type="Port" Display="always" Required="true" Mask="false">3002</Config>
+  <Config Name="AppData" Target="/data" Default="/mnt/user/appdata/open-generative-ai" Mode="rw" Description="Persistent data: sync log/state, local-provider config and job outputs" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/open-generative-ai</Config>
+  <Config Name="Node Environment" Target="NODE_ENV" Default="production" Mode="" Description="Node execution environment" Type="Variable" Display="advanced" Required="false" Mask="false">production</Config>
+</Container>

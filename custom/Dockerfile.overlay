@@ -1,0 +1,18 @@
+# Thin runtime layer on top of upstream's own Dockerfile (built verbatim by build.sh).
+# Keeping build logic upstream-owned means an upstream build change never conflicts with us;
+# only runtime concerns live here: healthcheck, version labels, telemetry, data dir.
+ARG BASE=open-generative-ai:upstream-build
+FROM ${BASE}
+
+ARG UPSTREAM_SHA=unknown
+ARG CUSTOM_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/owolfson/Open-Generative-AI" \
+      org.opencontainers.image.revision="${CUSTOM_SHA}" \
+      owen.upstream.revision="${UPSTREAM_SHA}"
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    OGAI_DATA_DIR=/data
+RUN mkdir -p /data
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:3000/studio || exit 1
