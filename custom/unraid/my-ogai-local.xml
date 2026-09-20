@@ -11,7 +11,7 @@
   <Support>https://github.com/owolfson/Open-Generative-AI</Support>
   <Project>https://github.com/owolfson/Open-Generative-AI</Project>
   <ReadMe/>
-  <Overview>Local inference + agent API (REST, SSE, MCP) for the Open-Generative-AI fork. Runs upstream's local-model engines on the GPUs behind the GPU arbiter; GPU jobs stay disabled until OGAI_GPU_ENABLED=1.</Overview>
+  <Overview>Local inference + agent API (REST, SSE, MCP) for the Open-Generative-AI fork. Runs upstream's local-model engines on the GPUs behind the GPU arbiter; GPU jobs stay disabled until OGAI_GPU_ENABLED=1. Give it GPUs with --gpus device=&lt;uuid&gt; (deploy.sh: OGAI_GPU_DEVICES); it can only use cards the container can see.</Overview>
   <Category>MediaApp:Other AI:</Category>
   <WebUI>http://[IP]:[PORT:8790]/health</WebUI>
   <TemplateURL/>
@@ -28,4 +28,7 @@
   <Config Name="API Token" Target="OGAI_TOKEN" Default="" Mode="" Description="Bearer token required by every endpoint except /health (deploy.sh generates one in AppData/.mcp-token)" Type="Variable" Display="always" Required="true" Mask="true"/>
   <Config Name="GPU Arbiter URL" Target="OGAI_ARBITER_URL" Default="" Mode="" Description="gpu-arbiter base URL; V100 jobs are refused without it" Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="Enable GPU jobs" Target="OGAI_GPU_ENABLED" Default="0" Mode="" Description="1 = allow GPU jobs. Keep 0 until a GPU test window is approved." Type="Variable" Display="always" Required="false" Mask="false">0</Config>
+  <Config Name="Allowed devices" Target="OGAI_ALLOWED_DEVICES" Default="v100,gtx1080" Mode="" Description="Which GPUs jobs may use. v100 needs the arbiter and evicts the Hermes brain; gtx1080 never does." Type="Variable" Display="advanced" Required="false" Mask="false">v100,gtx1080</Config>
+  <Config Name="CUDA index V100" Target="OGAI_DEVICE_INDEX_V100" Default="0" Mode="" Description="CUDA index of the V100 INSIDE the container" Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="CUDA index GTX 1080" Target="OGAI_DEVICE_INDEX_1080" Default="1" Mode="" Description="CUDA index of the GTX 1080 INSIDE the container (0 if it is the only GPU passed in)" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
 </Container>

@@ -5,6 +5,11 @@
 #   OGAI_ARBITER_URL   gpu-arbiter base URL (empty = V100 jobs are refused)
 #   OGAI_GPU_ENABLED   1 to allow GPU jobs (default 0 - keep 0 until a GPU test window is approved)
 #   OGAI_LOCAL_PORT (8790)   OGAI_DATA (/mnt/user/appdata/open-generative-ai)
+#   OGAI_GPU_DEVICES   docker --gpus device=<index-or-uuid>[,..]; empty = the container sees NO GPU
+#   OGAI_ALLOWED_DEVICES   which of v100,gtx1080 jobs may use (default v100,gtx1080)
+#   OGAI_DEVICE_INDEX_V100 / OGAI_DEVICE_INDEX_1080   CUDA index of each card INSIDE the container
+#     first deployment (V100 physically unreachable):
+#       OGAI_GPU_DEVICES=<GTX 1080 uuid> OGAI_ALLOWED_DEVICES=gtx1080 OGAI_DEVICE_INDEX_1080=0 OGAI_GPU_ENABLED=1
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 NAME=ogai-local
@@ -18,11 +23,17 @@ mkdir -p "$DATA"
 TOKEN_FILE="$DATA/.mcp-token"
 [ -s "$TOKEN_FILE" ] || (umask 077; openssl rand -hex 24 > "$TOKEN_FILE")
 
+GPU_ARGS=()
+[ -n "${OGAI_GPU_DEVICES:-}" ] && GPU_ARGS=(--gpus "device=${OGAI_GPU_DEVICES}")
+
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --restart unless-stopped -p "$PORT:8790" -v "$DATA:/data" \
+docker run -d --name "$NAME" --restart unless-stopped -p "$PORT:8790" -v "$DATA:/data" "${GPU_ARGS[@]}" \
   -e OGAI_TOKEN="$(cat "$TOKEN_FILE")" \
   -e OGAI_ARBITER_URL="${OGAI_ARBITER_URL:-}" \
   -e OGAI_GPU_ENABLED="${OGAI_GPU_ENABLED:-0}" \
+  -e OGAI_ALLOWED_DEVICES="${OGAI_ALLOWED_DEVICES:-v100,gtx1080}" \
+  -e OGAI_DEVICE_INDEX_V100="${OGAI_DEVICE_INDEX_V100:-0}" \
+  -e OGAI_DEVICE_INDEX_1080="${OGAI_DEVICE_INDEX_1080:-1}" \
   -e TZ="${TZ:-America/New_York}" \
   -l net.unraid.docker.managed=dockerman \
   -l "net.unraid.docker.icon=${OGAI_LOCAL_ICON:-https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/openai.svg}" \

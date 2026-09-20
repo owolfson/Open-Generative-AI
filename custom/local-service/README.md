@@ -20,6 +20,19 @@ behind a small stand-in for `require('electron')`, and exposes them over HTTP.
 - Every endpoint except `GET /health` needs `Authorization: Bearer $OGAI_TOKEN` (deploy.sh writes one to `$OGAI_DATA/.mcp-token`).
 - Muapi key-management and top-up MCP tools are blocked; only the allowlist in `src/mcp.js` is exposed.
 
+## GPU access (sd.cpp with CUDA)
+Upstream's Linux sd.cpp binaries are CPU/Vulkan/ROCm only and this host's Xeon has no AVX2, so we build our own:
+```bash
+custom/local-service/build-sdcpp.sh          # CUDA 12.6 build for sm_61 + sm_70, AVX-only CPU code -> vendor/sdcpp/ (git-ignored)
+custom/local-service/deploy.sh --build       # image bundles vendor/sdcpp; it MUST exist before the image builds
+```
+The container only sees the GPUs you pass in. First deployment - GTX 1080 only, V100 physically unreachable, no arbiter:
+```bash
+OGAI_GPU_DEVICES=<GTX 1080 uuid> OGAI_ALLOWED_DEVICES=gtx1080 OGAI_DEVICE_INDEX_1080=0 OGAI_GPU_ENABLED=1 custom/local-service/deploy.sh
+```
+Without a `device`, small models (<= 5.5GB of weights) default to the GTX 1080 lane so they never evict the Hermes brain.
+After an image upgrade the boot-time bundle sync (`src/bundle.js`) replaces the on-volume sd-cli when `BUNDLE_VERSION` changes.
+
 ## Use
 ```bash
 custom/local-service/deploy.sh --build          # image + container on :8790

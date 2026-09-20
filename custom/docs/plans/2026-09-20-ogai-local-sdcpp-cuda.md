@@ -436,7 +436,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Consumes: `vendor/sdcpp/` from Task 3, `syncBundledBinary` (Task 2), `allowedDevices` (Task 1)
 - Produces: image with the bundle at `/opt/ogai/resources/local-ai/linux-x64/bin`; `deploy.sh` honours `OGAI_GPU_DEVICES` (docker `--gpus device=...`), `OGAI_ALLOWED_DEVICES`, `OGAI_DEVICE_INDEX_V100`, `OGAI_DEVICE_INDEX_1080`
 
-- [ ] **Step 1: Update the Dockerfile** - after the `COPY custom/local-service/src ./src` line add:
+- [ ] **Step 1: Update the Dockerfile** - right after `WORKDIR /srv` (before the service-code COPYs, so code edits never invalidate the ~1.3GB bundle layer) add:
 ```dockerfile
 # sd.cpp built with CUDA by build-sdcpp.sh (run it first). The stand-in presents this directory to upstream's
 # engine as its "bundled binary", so the upstream CPU-only download is never used.
