@@ -64,6 +64,14 @@
 
 ---
 
+## Results (2026-09-20)
+
+- **Tasks 1-6 DONE, 121 tests green** (`cd custom/local-service && node --test test/*.test.js`). Commits: specs `d80d14f`, runner `0a24644`, extended path `8b605f8`, image-to-video input `f3dbefa`, lease batching `d9c4e10`, model mounts `485023c`.
+- **Live (redeployed):** `ogai-local` mounts `/mnt/user/appdata/comfy-imagegen/models` -> `/models/flux` and `/mnt/user/appdata/comfyui-qwen-image/models` -> `/models/qwen` read-only (`OGAI_MODEL_MOUNTS` in the host-only `deploy.env`; `OGAI_MODEL_DIRS=/models/flux:/models/qwen`). `/api/local/catalog` reports `filesPresent: true` for Flux (22GB), Qwen-Image (24GB), Wan 2.2 I2V (26GB); `sd-cli` runs (needs `LD_LIBRARY_PATH` = its own dir, which the runner sets). Boot released no stale lease (arbiter `/release` = 200, nothing held).
+- **Design deltas vs the plan text:** `pending()` (not `peek()`) is what the queue hands the runner; the runner OWNS the lease (`acquireImpl`), sized for the batch (max VRAM, summed est_seconds capped at the arbiter's 14400, `(+N queued)` in the note); a 10s idle timer frees a kept lease if the next job never starts; SIGTERM = `queue.drain()` (stops sd-cli) THEN release; boot prunes `tmpDir`.
+- **Known unknown for Task 7:** the on-disk Qwen2.5-VL and UMT5 text encoders are ComfyUI `fp8_scaled` (`*.scale_weight` / `*.scale_input` tensors). sd.cpp renames `.scale_weight` -> `.weight_scale` and applies it in its Linear block, so they MAY load; unproven. If a job dies loading them, fetch GGUF/fp16 encoders (sd.cpp docs use `Qwen2.5-VL-7B-Instruct-Q8_0.gguf` and `umt5-xxl-encoder-Q8_0.gguf`) rather than debugging fp8.
+- **Task 7 (supervised V100 batch) NOT run** - waits for Owen's go-ahead (brain + TTS go down ~10 min).
+
 ## Self-Review
 
 - Covers: Flux/Qwen/Wan via sd.cpp (T1-T3), the I2V input path and MCP tool (T4), the downtime cost lesson (T5), deploy (T6), evidence with abort rules (T7).
