@@ -5,6 +5,7 @@ const { loadEngines } = require('./engines');
 const { syncBundledBinary } = require('./bundle');
 const { JobQueue } = require('./queue');
 const { releaseStaleLease } = require('./gate');
+const { pruneTmp } = require('./tmp');
 const { createRunner } = require('./runner');
 const { createService } = require('./service');
 const { createMcp } = require('./mcp');
@@ -12,6 +13,8 @@ const { createServer } = require('./server');
 
 const config = loadConfig();
 fs.mkdirSync(config.outputsDir, { recursive: true });
+const pruned = pruneTmp(config.tmpDir);
+if (pruned) console.log(`pruned ${pruned} leftover scratch item(s) from ${config.tmpDir}`);
 const bundle = syncBundledBinary({ resourcesPath: config.resourcesPath, userDataPath: config.dataDir });
 console.log(`sd.cpp bundle: ${bundle.synced ? `installed ${bundle.version} (replaced ${bundle.replaced || 'nothing'})` : bundle.reason}`);
 

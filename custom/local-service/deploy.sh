@@ -8,6 +8,8 @@
 #   OGAI_GPU_DEVICES   docker --gpus device=<index-or-uuid>[,..]; empty = the container sees NO GPU
 #   OGAI_ALLOWED_DEVICES   which of v100,gtx1080 jobs may use (default v100,gtx1080)
 #   OGAI_DEVICE_INDEX_V100 / OGAI_DEVICE_INDEX_1080   CUDA index of each card INSIDE the container
+#   OGAI_MODEL_MOUNTS  host:container[,host:container..]  model stores mounted READ-ONLY; each container path is searched (by
+#     basename, 3 levels deep) for the Flux / Qwen-Image / Wan files, e.g. /mnt/user/appdata/comfy-imagegen/models:/models/flux
 #     first deployment (V100 physically unreachable):
 #       OGAI_GPU_DEVICES=<GTX 1080 uuid> OGAI_ALLOWED_DEVICES=gtx1080 OGAI_DEVICE_INDEX_1080=0 OGAI_GPU_ENABLED=1
 set -euo pipefail
@@ -28,8 +30,19 @@ GPU_ARGS=()
 # Docker parses --gpus as CSV: a comma list must be wrapped in literal quotes ("device=A,B"); a single id works either way.
 [ -n "${OGAI_GPU_DEVICES:-}" ] && GPU_ARGS=(--gpus "\"device=${OGAI_GPU_DEVICES}\"")
 
+MOUNT_ARGS=(); MODEL_DIRS=""
+if [ -n "${OGAI_MODEL_MOUNTS:-}" ]; then
+  IFS=',' read -r -a MOUNTS <<< "$OGAI_MODEL_MOUNTS"
+  for m in "${MOUNTS[@]}"; do
+    host=${m%%:*}; ctr=${m#*:}
+    [ -d "$host" ] || { echo "OGAI_MODEL_MOUNTS: $host is not a directory" >&2; exit 1; }
+    MOUNT_ARGS+=(-v "$host:$ctr:ro"); MODEL_DIRS="${MODEL_DIRS:+$MODEL_DIRS:}$ctr"
+  done
+fi
+
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" --restart unless-stopped -p "$PORT:8790" -v "$DATA:/data" "${GPU_ARGS[@]}" \
+docker run -d --name "$NAME" --restart unless-stopped -p "$PORT:8790" -v "$DATA:/data" "${MOUNT_ARGS[@]}" "${GPU_ARGS[@]}" \
+  -e OGAI_MODEL_DIRS="$MODEL_DIRS" \
   -e OGAI_TOKEN="$(cat "$TOKEN_FILE")" \
   -e OGAI_ARBITER_URL="${OGAI_ARBITER_URL:-}" \
   -e OGAI_GPU_ENABLED="${OGAI_GPU_ENABLED:-0}" \
