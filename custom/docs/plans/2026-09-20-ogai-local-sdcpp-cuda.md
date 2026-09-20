@@ -491,6 +491,16 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
+## Results (executed 2026-09-20)
+
+- Build: sd.cpp `master-881-17860c0`, CUDA 12.8 (built inside the `wan2gp:v100` image - its toolchain avoided a ~30 min apt install on a busy host), sm_61+sm_70, AVX-only. The strict instruction guard first FAILED (38 hits, all libwebp's runtime-dispatched `*_AVX2` functions, none in ggml), so WebP/WebM were switched off and the guard now passes with 0. `libnccl.so.2` is linked by ggml-cuda (GGML_USE_NCCL is a global define) and is shipped in the bundle (~384MB).
+- Image: 1.6GB; the 1.3GB bundle is the first layer so code edits never rewrite it. The bundle syncs to `/data/local-ai/bin` at boot, version-stamped.
+- Isolation verified: `nvidia-smi -L` inside the container lists only the GTX 1080; V100 memory identical before/during/after each render.
+- Renders (GTX 1080 lane, via MCP `local_generate_image`, no device given so the policy chose the 1080):
+  - Dreamshaper 8, 512x512, 20 steps: 44s incl. model load, 8.0GB peak on the card.
+  - Z-Image Turbo, 1024x1024, 8 steps: 204s, 7.5GB peak on the card (predicted NOT to fit; it does). Photographic quality, not black.
+  - Peaks include the ~2GB held by the resident TTS container; renders leave <1GB headroom for it.
+
 ## Self-Review
 
 - Spec decisions covered: unmodified upstream engine via bundled-binary path (Tasks 2, 4); GPU off/isolated by default and the 1080 lane never evicts the brain (Tasks 1, 5); Volta/Pascal + no-AVX2 constraints (Task 3); update-safety of the bundled binary (Task 2).
