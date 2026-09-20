@@ -1,0 +1,2 @@
+# compiled sd.cpp + CUDA libs (hundreds of MB) - produced by build-sdcpp.sh
+vendor/
