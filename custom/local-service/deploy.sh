@@ -25,7 +25,8 @@ TOKEN_FILE="$DATA/.mcp-token"
 [ -s "$TOKEN_FILE" ] || (umask 077; openssl rand -hex 24 > "$TOKEN_FILE")
 
 GPU_ARGS=()
-[ -n "${OGAI_GPU_DEVICES:-}" ] && GPU_ARGS=(--gpus "device=${OGAI_GPU_DEVICES}")
+# Docker parses --gpus as CSV: a comma list must be wrapped in literal quotes ("device=A,B"); a single id works either way.
+[ -n "${OGAI_GPU_DEVICES:-}" ] && GPU_ARGS=(--gpus "\"device=${OGAI_GPU_DEVICES}\"")
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --restart unless-stopped -p "$PORT:8790" -v "$DATA:/data" "${GPU_ARGS[@]}" \

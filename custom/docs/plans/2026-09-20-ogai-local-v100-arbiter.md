@@ -103,6 +103,15 @@ and in `src/mcp.js` change the `device` description to `Default: gtx1080 for mod
 
 ---
 
+## Results (executed 2026-09-20 ~12:00 EDT)
+
+- Task 1: V100 opt-in; verified live: SDXL without `device` -> `DEVICE_REQUIRED`, arbiter history unchanged, brain untouched. 75/75 tests.
+- Task 2: registered (backup `app.py.bak-ogai-local-20260920-115538`). A compose `--dry-run` first showed only `gpu-arbiter` would be recreated. After recreate: same mounts/env, `hermes-llm` StartedAt unchanged, `/gpu/state` shows `can_fit["ogai-local"] = {declared_peak_gb: 10.0, fits_in_budget: false}` (false alongside the resident brain, which is exactly why a grant evicts it; identical to wan2gp / comfyui-qwen-image).
+- Task 3: `--gpus` needs `"device=A,B"` quoted for a list; inside the container V100 = index 0, GTX 1080 = index 1. `deploy.env.bak-1080-only` keeps the previous isolation one `cp` away.
+- Task 4 (one job, `z-image-turbo`, `device:"v100"`): arbiter log `stopping hermes-llm` 16:01:18 -> `stopping speaches-chatterbox` 16:01:43 -> `granted lease` 16:02:17 -> `released lease (39.5s)` 16:02:57 -> `starting hermes-llm` 16:02:57 -> `restarting speaches-chatterbox` 16:03:15. Render ~35s (vs 204s on the 1080), 1024x1024, not black. Brain healthy again at +285s (~4.5 min down); TTS reloaded its model concurrently and served again at ~7 min. Final: V100 28.98GB (baseline 29.24GB), lease none, `ambient_safe` true. No abort criterion tripped.
+- Observation: the arbiter's `/status` blocks ~65s while it stops containers (synchronous Docker calls), so a status timeout during an eviction is normal, not a fault.
+- Option to reduce downtime (not built): hold one lease across consecutive V100 jobs instead of evicting/restoring per job.
+
 ## Self-Review
 
 - Constraints map to tasks: opt-in V100 (Task 1), registry + always-on trap (Task 2), isolation config (Task 3), supervised proof with abort rules (Task 4).

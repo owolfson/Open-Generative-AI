@@ -44,6 +44,28 @@ After an image upgrade the boot-time bundle sync (`src/bundle.js`) replaces the 
 \* total for the card, including the ~2GB the resident TTS container holds, so a render leaves almost no headroom for it.
 Upstream passes no offload/tiling flags to sd-cli, so bigger models than these will not fit the 1080.
 
+## GPU arbiter registration (V100)
+`ogai-local` is registered in gpu-arbiter. The arbiter's `app.py` is outside this repo (bind-mounted read-only from
+`/mnt/user/appdata/gpu-arbiter/app.py`), so the change is recorded here. Three edits, made with a timestamped backup:
+1. `PRIORITIES["ogai-local"] = 4` (same class as the other media consumers).
+2. `CONSUMER_PEAK_VRAM_GB["ogai-local"] = 10.0`. Registry names must equal the docker container name.
+3. `_UI_ONLY_CONSUMER_ALIASES` += `"ogai-local"`. The container is always up but holds VRAM only inside a lease; without this
+   `_persistent_holder_running()` sees a running registered container and blocks restoring hermes-llm/speaches forever.
+
+Apply with `cd /boot/config/plugins/compose.manager/projects/Hermes && docker compose -p hermes up -d --no-deps --force-recreate gpu-arbiter`
+(never a bare `docker restart`; only while no lease is held). The gate (`src/gate.js`) never runs a V100 job without a granted lease and
+releases by `lease_id`. The V100 is opt-in per call (`device: "v100"`); the default lane is the GTX 1080.
+
+**What a V100 job really costs (measured 2026-09-20, Z-Image Turbo 1024px, brain + TTS resident beforehand):**
+compute is cheap, service downtime is not. The arbiter stops `hermes-llm` and `speaches-chatterbox` on ANY grant and restores them on release.
+| | Time |
+|---|---|
+| Arbiter eviction handshake before the grant | 59s |
+| Lease held (render ~35s; the GTX 1080 takes 204s) | 39.5s |
+| Brain (`hermes-llm`) unavailable | ~4.5 min |
+| TTS unavailable (its model reloads concurrently with the brain's) | ~7 min |
+The arbiter's `/status` does not answer while it is stopping containers (~65s), so callers must not treat a status timeout as failure.
+
 ## Host settings file
 Per-host values (GPU uuid, arbiter url, builder image) belong in `$OGAI_DATA/deploy.env`, not in the repo:
 ```
