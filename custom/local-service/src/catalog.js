@@ -5,7 +5,6 @@
 // Volta (compute 7.0) facts: WanGP forces fp16 (no bf16); no FP8/FP4/Nunchaku kernels; SDPA attention only.
 const SD = 'sdcpp';
 const WAN = 'wangp';
-const COMFY = 'comfyui';
 
 const ENTRIES = [
   { id: 'z-image-turbo', name: 'Z-Image Turbo', kind: 'image', route: SD, v100: 'recommended', star: true, evidence: 'proven', provenOn: ['gtx1080'], weightsGb: 5.2, note: 'Measured 2026-09-20 on the GTX 1080 lane: 1024x1024, 8 steps, 204s, 7.5GB peak on the card including the resident TTS container. Best quality for the effort.' },
@@ -14,10 +13,10 @@ const ENTRIES = [
   { id: 'dreamshaper-8', name: 'Dreamshaper 8', kind: 'image', route: SD, v100: 'supported', star: false, evidence: 'proven', provenOn: ['gtx1080'], weightsGb: 2.1, note: 'Measured 2026-09-20 on the GTX 1080 lane: 512x512, 20 steps, 44s including model load, 8.0GB peak on the card (tight beside the TTS container).' },
   { id: 'realistic-vision-v51', name: 'Realistic Vision v5.1', kind: 'image', route: SD, v100: 'supported', star: false, evidence: 'untested', provenOn: [], weightsGb: 2.1, note: 'SD 1.5 photorealistic.' },
   { id: 'anything-v5', name: 'Anything v5', kind: 'image', route: SD, v100: 'supported', star: false, evidence: 'untested', provenOn: [], weightsGb: 2.1, note: 'SD 1.5 anime/illustration.' },
-  { id: 'wan2gp:flux-dev', name: 'Flux.1 Dev', kind: 'image', route: WAN, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 12.0, note: 'int8 12.0GB. WanGP forces fp16 on Volta - run a black-image check before trusting it.' },
-  { id: 'wan2gp:qwen-image', name: 'Qwen Image', kind: 'image', route: COMFY, v100: 'recommended', star: true, evidence: 'proven', provenOn: ['v100'], weightsGb: 15.7, note: 'Q6_K GGUF via ComfyUI is proven here (~12 min for 40 steps at 1328x1328, ~25GB peak). Never force fp16: output goes black.' },
+  { id: 'wan2gp:flux-dev', name: 'Flux.1 Dev', kind: 'image', route: SD, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 21.6, note: 'Served by sd.cpp from the Q8_0 GGUF already on disk (ComfyUI store): ~22GB on the V100 with the T5 encoder on the GPU. Not yet run on this box.' },
+  { id: 'wan2gp:qwen-image', name: 'Qwen Image', kind: 'image', route: SD, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 24.6, note: 'Served by sd.cpp (Q6_K GGUF + Qwen2.5-VL on disk). The sd.cpp path is unmeasured: under ComfyUI the same weights took ~12 min at 1328px/40 steps (~25GB) and forced fp16 gave black images; the fp8 text encoder on disk may need a GGUF instead.' },
   { id: 'wan2gp:wan22-t2v', name: 'Wan 2.2 (Text-to-Video)', kind: 'video', route: WAN, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 29.8, note: 'WanGP ships an fp16-mixed int8 build (14.9GB per expert, two experts).' },
-  { id: 'wan2gp:wan22-i2v', name: 'Wan 2.2 (Image-to-Video)', kind: 'video', route: WAN, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 29.8, note: 'Wan 2.1/2.2 I2V GGUFs are already on disk in the ComfyUI store.' },
+  { id: 'wan2gp:wan22-i2v', name: 'Wan 2.2 (Image-to-Video)', kind: 'video', route: SD, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 26.8, note: 'Served by sd.cpp: the Q4_K_M high/low-noise pair + lightx2v 4-step LoRAs already on disk; avi output. Not yet run on this box.' },
   { id: 'wan2gp:hunyuan-video', name: 'Hunyuan Video', kind: 'video', route: WAN, v100: 'supported', star: false, evidence: 'untested', provenOn: [], weightsGb: 13.2, note: 'Runs, but Wan 2.2 beats it.' },
   { id: 'wan2gp:ltx-video', name: 'LTX Video (0.9.8 13B distilled)', kind: 'video', route: WAN, v100: 'supported', star: false, evidence: 'untested', provenOn: [], weightsGb: 13.2, note: 'Fastest video option. LTX-2.3 22B is excluded.' },
 ];

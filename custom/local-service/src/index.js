@@ -16,7 +16,7 @@ console.log(`sd.cpp bundle: ${bundle.synced ? `installed ${bundle.version} (repl
 
 const standin = loadEngines({ upstreamDir: config.upstreamDir, userDataPath: config.dataDir, resourcesPath: config.resourcesPath });
 const queue = new JobQueue({ run: createRunner({ config, standin }).run });
-const service = createService({ standin, queue });
+const service = createService({ standin, queue, config });
 const mcp = createMcp({ config, queue, service });
 const server = createServer({ config, standin, queue, service, mcp });
 

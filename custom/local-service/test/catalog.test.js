@@ -28,16 +28,14 @@ test('every starred model is recommended and no supported model is starred', () 
   for (const m of catalog.staticCatalog()) assert.equal(m.star, m.v100 === 'recommended', m.id);
 });
 
-test('routes: sd.cpp models -> sdcpp, Qwen -> comfyui (fp16 corrupts it in WanGP), the rest -> wangp', () => {
-  assert.equal(catalog.assess('z-image-turbo').route, 'sdcpp');
-  assert.equal(catalog.assess('stable-diffusion-xl-base').route, 'sdcpp');
-  assert.equal(catalog.assess('wan2gp:qwen-image').route, 'comfyui');
-  for (const id of ['wan2gp:flux-dev', 'wan2gp:wan22-t2v', 'wan2gp:wan22-i2v', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video']) assert.equal(catalog.assess(id).route, 'wangp', id);
+test('routes: everything we can serve goes through sd.cpp; only models without weights on disk stay unwired', () => {
+  for (const id of ['z-image-turbo', 'z-image-base', 'stable-diffusion-xl-base', 'wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v']) assert.equal(catalog.assess(id).route, 'sdcpp', id);
+  for (const id of ['wan2gp:wan22-t2v', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video']) assert.equal(catalog.assess(id).route, 'wangp', id);
 });
 
 test('evidence: only models actually run on this box are proven, and provenOn says on which GPU', () => {
   const proven = Object.fromEntries(catalog.staticCatalog().filter((m) => m.evidence === 'proven').map((m) => [m.id, m.provenOn]));
-  assert.deepEqual(proven, { 'dreamshaper-8': ['gtx1080'], 'z-image-turbo': ['gtx1080'], 'wan2gp:qwen-image': ['v100'] });
+  assert.deepEqual(proven, { 'dreamshaper-8': ['gtx1080'], 'z-image-turbo': ['gtx1080'] });   // Qwen was proven under ComfyUI, not under this engine
   for (const m of catalog.staticCatalog().filter((e) => e.evidence === 'untested')) assert.deepEqual(m.provenOn, [], m.id);
 });
 

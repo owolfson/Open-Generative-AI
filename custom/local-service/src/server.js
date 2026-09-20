@@ -61,7 +61,7 @@ function createServer({ config, standin, queue, service, mcp }) {
       try {
         if (GATED.has(channel)) {
           const done = await service.generateAndWait(args[0]);
-          return send(res, 200, { ok: true, result: { url: done.result.dataUrl, seed: done.result.seed } });
+          return send(res, 200, { ok: true, result: { url: done.result.dataUrl || done.result.url, seed: done.result.seed } });   // video has no data URL
         }
         return send(res, 200, { ok: true, result: await standin.invoke(channel, ...args) });
       } catch (err) {
@@ -85,12 +85,12 @@ function createServer({ config, standin, queue, service, mcp }) {
       return queue.get(m[1]) ? send(res, 200, { cancelled: queue.cancel(m[1]) }) : send(res, 404, { error: 'no such job' });
     }
 
-    m = /^\/outputs\/([\w.-]+\.png)$/.exec(pathname);
+    m = /^\/outputs\/([\w.-]+\.(png|avi))$/.exec(pathname);
     if (method === 'GET' && m) {
       const file = path.join(config.outputsDir, path.basename(m[1]));
       if (!fs.existsSync(file)) return send(res, 404, { error: 'not found' });
       const data = fs.readFileSync(file);
-      res.writeHead(200, { 'content-type': 'image/png', 'content-length': data.length });
+      res.writeHead(200, { 'content-type': m[2] === 'avi' ? 'video/x-msvideo' : 'image/png', 'content-length': data.length });
       return res.end(data);
     }
 

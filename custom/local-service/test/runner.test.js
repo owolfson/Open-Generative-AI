@@ -8,7 +8,7 @@ const { createRunner } = require('../src/runner');
 
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('PNG!').toString('base64')}`;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-runner-'));
-const config = (over = {}) => ({ gpuEnabled: true, allowedDevices: ['v100', 'gtx1080'], arbiterUrl: 'http://arb', outputsDir: tmp(), sdcppConsumer: 'ogai-local', sdcppVramGb: 10, deviceIndexV100: 0, deviceIndex1080: 1, ...over });
+const config = (over = {}) => ({ gpuEnabled: true, allowedDevices: ['v100', 'gtx1080'], arbiterUrl: 'http://arb', outputsDir: tmp(), sdcppConsumer: 'ogai-local', sdcppVramGb: 10, deviceIndexV100: 0, deviceIndex1080: 1, dataDir: tmp(), tmpDir: tmp(), sdcliPath: '/opt/sd-cli', modelDirs: [], ...over });
 const job = (over = {}) => ({ id: 'job1', route: 'sdcpp', params: { model: 'z-image-turbo', prompt: 'a cat' }, ...over });
 const ctx = () => ({ signal: new AbortController().signal });
 const quiet = { warn() {}, error() {} };
@@ -121,4 +121,84 @@ test('with only the V100 allowed small models use it (through the arbiter)', asy
 test('no allowed device at all is refused', async () => {
   const f = fakes();
   await assert.rejects(() => createRunner({ config: config({ allowedDevices: [] }), standin: f.standin, gateImpl: f.gate.impl, log: quiet }).run(job(), ctx()), { code: 'DEVICE_NOT_ALLOWED' });
+});
+
+// ---------- extended sd.cpp models (Flux / Qwen / Wan) ----------
+const EventEmitter = require('node:events');
+function modelDir(files) {
+  const d = tmp();
+  for (const f of files) { const p = path.join(d, 'models', f); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, 'x'); }
+  return d;
+}
+const FLUX_FILES = ['flux1-dev-Q8_0.gguf', 'ae.sft.safetensors', 'clip_l.safetensors', 't5xxl_fp16.safetensors'];
+const WAN_FILES = ['Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf', 'Wan2_1_VAE_bf16.safetensors', 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
+  'wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors', 'wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors'];
+function fakeSdcli(bytes = 'BYTES') {
+  const calls = [];
+  const fn = async (opts) => {
+    calls.push(opts);
+    const out = opts.args[opts.args.indexOf('-o') + 1];
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, bytes);
+    opts.onProgress({ step: 1, totalSteps: 4, progress: 0.25, status: 'sampling' });
+    return { output: '' };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('Flux on the V100: leases the model\'s own VRAM, runs sd-cli with the right args and GPU env, persists a png', async () => {
+  const { standin, gate } = fakes(); const sd = fakeSdcli('PNGBYTES');
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)] });
+  const r = createRunner({ config: cfg, standin, gateImpl: gate.impl, sdcli: sd, log: quiet });
+  const out = await r.run(job({ params: { model: 'wan2gp:flux-dev', prompt: 'a cat', device: 'v100', seed: 5 } }), ctx());
+  assert.equal(gate.calls[0].vramGb, 22);
+  assert.equal(gate.calls[0].consumer, 'ogai-local');
+  assert.equal(gate.calls[0].estSeconds, 900);
+  const call = sd.calls[0];
+  assert.equal(call.binary, cfg.sdcliPath);
+  assert.ok(call.args.includes('--t5xxl'));
+  assert.equal(call.env.CUDA_VISIBLE_DEVICES, '0');
+  assert.equal(call.env.CUDA_DEVICE_ORDER, 'PCI_BUS_ID');
+  assert.deepEqual({ seed: out.seed, file: out.file, url: out.url, kind: out.kind, mime: out.mime, bytes: out.bytes }, { seed: 5, file: 'job1.png', url: '/outputs/job1.png', kind: 'image', mime: 'image/png', bytes: 8 });
+  assert.equal(out.dataUrl, `data:image/png;base64,${Buffer.from('PNGBYTES').toString('base64')}`);
+  assert.equal(fs.readFileSync(path.join(cfg.outputsDir, 'job1.png'), 'utf8'), 'PNGBYTES');
+  assert.equal(standin.calls.length, 0, "upstream's engine is not used for extended models");
+});
+
+test('missing model files fail BEFORE any arbiter lease (never evict the brain for a job that cannot run)', async () => {
+  const { standin, gate } = fakes(); const sd = fakeSdcli();
+  const r = createRunner({ config: config({ modelDirs: [modelDir(['ae.sft.safetensors'])] }), standin, gateImpl: gate.impl, sdcli: sd, log: quiet });
+  await assert.rejects(() => r.run(job({ params: { model: 'wan2gp:flux-dev', prompt: 'x', device: 'v100' } }), ctx()),
+    (err) => err.code === 'MODEL_FILES_MISSING' && /flux1-dev-Q8_0\.gguf/.test(err.message) && /t5xxl_fp16/.test(err.message));
+  assert.equal(gate.calls.length, 0);
+  assert.equal(sd.calls.length, 0);
+});
+
+test('video model: avi artifact with kind video, a longer lease estimate, and no data URL', async () => {
+  const { standin, gate } = fakes(); const sd = fakeSdcli('AVIBYTES');
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
+  const r = createRunner({ config: cfg, standin, gateImpl: gate.impl, sdcli: sd, log: quiet });
+  const out = await r.run(job({ params: { model: 'wan2gp:wan22-i2v', prompt: 'it moves', device: 'v100', init_image: '/tmp/in.png', seed: 9 } }), ctx());
+  assert.equal(gate.calls[0].vramGb, 26);
+  assert.equal(gate.calls[0].estSeconds, 1800);
+  assert.ok(sd.calls[0].args.includes('vid_gen'));
+  assert.deepEqual({ file: out.file, url: out.url, kind: out.kind, mime: out.mime, seed: out.seed }, { file: 'job1.avi', url: '/outputs/job1.avi', kind: 'video', mime: 'video/x-msvideo', seed: 9 });
+  assert.equal(out.dataUrl, undefined);
+  assert.equal(fs.readFileSync(path.join(cfg.outputsDir, 'job1.avi'), 'utf8'), 'AVIBYTES');
+});
+
+test('an image-to-video job without an input image is refused before the lease', async () => {
+  const { standin, gate } = fakes(); const sd = fakeSdcli();
+  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin, gateImpl: gate.impl, sdcli: sd, log: quiet });
+  await assert.rejects(() => r.run(job({ params: { model: 'wan2gp:wan22-i2v', prompt: 'x', device: 'v100' } }), ctx()), { code: 'IMAGE_REQUIRED' });
+  assert.equal(gate.calls.length, 0);
+});
+
+test('sd-cli progress is forwarded as local-ai:progress events', async () => {
+  const { standin, gate } = fakes(); standin.events = new EventEmitter();
+  const seen = []; standin.events.on('send', (channel, data) => seen.push([channel, data]));
+  const r = createRunner({ config: config({ modelDirs: [modelDir(FLUX_FILES)] }), standin, gateImpl: gate.impl, sdcli: fakeSdcli(), log: quiet });
+  await r.run(job({ params: { model: 'wan2gp:flux-dev', prompt: 'x', device: 'v100' } }), ctx());
+  assert.deepEqual(seen, [['local-ai:progress', { step: 1, totalSteps: 4, progress: 0.25, status: 'sampling' }]]);
 });

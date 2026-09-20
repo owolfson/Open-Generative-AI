@@ -7,6 +7,9 @@ function loadConfig(env = process.env) {
     port: Number(env.OGAI_LOCAL_PORT || 8790),
     dataDir,
     outputsDir: path.join(dataDir, 'outputs'),
+    sdcliPath: path.join(dataDir, 'local-ai', 'bin', 'sd-cli'),          // where the boot-time bundle sync puts the CUDA sd-cli
+    tmpDir: path.join(dataDir, 'local-ai', 'tmp'),
+    modelDirs: (env.OGAI_MODEL_DIRS || '').split(':').filter(Boolean),    // read-only mounts searched (by basename) for extended models
     upstreamDir: env.OGAI_UPSTREAM_DIR || '/app',           // repo root that contains electron/lib
     resourcesPath: env.OGAI_RESOURCES_PATH || '',           // holds local-ai/<platform>-<arch>/bin/sd-cli
     token: env.OGAI_TOKEN || '',

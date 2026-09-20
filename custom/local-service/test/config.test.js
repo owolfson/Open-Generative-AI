@@ -35,3 +35,11 @@ test('allowed devices default to both GPUs; values are trimmed, lower-cased and 
   assert.deepEqual(loadConfig({ OGAI_ALLOWED_DEVICES: 'gtx1080' }).allowedDevices, ['gtx1080']);
   assert.deepEqual(loadConfig({ OGAI_ALLOWED_DEVICES: ' GTX1080 , nonsense ,v100' }).allowedDevices, ['gtx1080', 'v100']);
 });
+
+test('model dirs come from OGAI_MODEL_DIRS (colon separated) and the sd-cli / tmp paths sit under the data dir', () => {
+  assert.deepEqual(loadConfig({}).modelDirs, []);
+  assert.deepEqual(loadConfig({ OGAI_MODEL_DIRS: '/a:/b::' }).modelDirs, ['/a', '/b']);
+  const c = loadConfig({ OGAI_DATA_DIR: '/x' });
+  assert.equal(c.sdcliPath, '/x/local-ai/bin/sd-cli');
+  assert.equal(c.tmpDir, '/x/local-ai/tmp');
+});

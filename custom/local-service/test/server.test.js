@@ -16,6 +16,7 @@ const auth = { authorization: 'Bearer tok' };
 async function boot({ token = 'tok', run } = {}) {
   const outputsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-srv-'));
   fs.writeFileSync(path.join(outputsDir, 'x.png'), 'PNGDATA');
+  fs.writeFileSync(path.join(outputsDir, 'v.avi'), 'AVIDATA');
   const standin = {
     events: new EventEmitter(),
     calls: [],
@@ -170,5 +171,24 @@ test('/mcp forwards JSON-RPC to the mcp handler; notifications get 202', async (
     assert.deepEqual(out, { jsonrpc: '2.0', id: 1, result: { echoed: 'ping' } });
     assert.equal((await jsonPost(`${app.base}/mcp`, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
     assert.equal((await fetch(`${app.base}/mcp`, { headers: auth })).status, 405);
+  } finally { await app.close(); }
+});
+
+test('/outputs serves avi video with the right content type (and still refuses other extensions)', async () => {
+  const app = await boot();
+  try {
+    const ok = await fetch(`${app.base}/outputs/v.avi`, { headers: auth });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.headers.get('content-type'), 'video/x-msvideo');
+    assert.equal(await ok.text(), 'AVIDATA');
+    assert.equal((await fetch(`${app.base}/outputs/x.exe`, { headers: auth })).status, 404);
+  } finally { await app.close(); }
+});
+
+test('/ipc generate for a video job returns the file url (there is no data URL for video)', async () => {
+  const app = await boot({ run: async () => ({ seed: 3, file: 'v.avi', url: '/outputs/v.avi', kind: 'video', mime: 'video/x-msvideo' }) });
+  try {
+    const out = await (await jsonPost(`${app.base}/ipc/local-ai:generate`, { args: [{ model: 'z-image-turbo', prompt: 'x' }] })).json();
+    assert.deepEqual(out, { ok: true, result: { url: '/outputs/v.avi', seed: 3 } });
   } finally { await app.close(); }
 });

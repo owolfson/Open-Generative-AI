@@ -1,6 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { createService } = require('../src/service');
 const { JobQueue } = require('../src/queue');
 
@@ -17,7 +20,7 @@ test('submitGeneration validates the model and prompt', () => {
 test('submitGeneration queues a job with the catalog route and kind', async () => {
   const q = new JobQueue({ run: async () => ({}) });
   const job = createService({ standin, queue: q }).submitGeneration({ model: 'wan2gp:qwen-image', prompt: 'x' });
-  assert.equal(job.route, 'comfyui');
+  assert.equal(job.route, 'sdcpp');   // Qwen-Image is now served by sd.cpp, no longer routed to a separate engine
   assert.equal(job.kind, 'image');
   await q.wait(job.id, 1000);
 });
@@ -36,6 +39,19 @@ test('catalogPayload annotates upstream sd.cpp models, flags unknown ones, adds 
   assert.equal(byId['z-image-turbo'].state, 'not-downloaded');
   assert.equal(byId.mystery.v100, 'unknown');
   assert.equal(byId['wan2gp:wan22-t2v'].route, 'wangp');
-  assert.equal(models.filter((m) => m.route === 'sdcpp').length, 1);   // only what the engine actually listed
+  // upstream-served sd.cpp models appear only if the engine listed them; the extended ones (own specs) are always known
+  assert.deepEqual(models.filter((m) => m.route === 'sdcpp').map((m) => m.id).sort(), ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'z-image-turbo']);
   assert.ok(excluded.some((e) => e.id === 'ltx-2.3-22b'));
+});
+
+test('catalogPayload tells agents which extended models are runnable right now (filesPresent) and their VRAM declaration', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-cat-'));
+  for (const f of ['flux1-dev-Q8_0.gguf', 'ae.sft.safetensors', 'clip_l.safetensors', 't5xxl_fp16.safetensors']) fs.writeFileSync(path.join(dir, f), 'x');
+  const svc = createService({ standin, queue: new JobQueue({ run: async () => ({}) }), config: { modelDirs: [dir] } });
+  const byId = Object.fromEntries((await svc.catalogPayload()).models.map((m) => [m.id, m]));
+  assert.equal(byId['wan2gp:flux-dev'].filesPresent, true);
+  assert.equal(byId['wan2gp:flux-dev'].vramGb, 22);
+  assert.equal(byId['wan2gp:qwen-image'].filesPresent, false);
+  assert.equal(byId['wan2gp:wan22-i2v'].filesPresent, false);
+  assert.equal(byId['wan2gp:hunyuan-video'].filesPresent, undefined, 'models with no engine are not judged');
 });
