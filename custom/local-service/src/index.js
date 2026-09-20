@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const { loadConfig } = require('./config');
 const { loadEngines } = require('./engines');
+const { syncBundledBinary } = require('./bundle');
 const { JobQueue } = require('./queue');
 const { createRunner } = require('./runner');
 const { createService } = require('./service');
@@ -10,6 +11,8 @@ const { createServer } = require('./server');
 
 const config = loadConfig();
 fs.mkdirSync(config.outputsDir, { recursive: true });
+const bundle = syncBundledBinary({ resourcesPath: config.resourcesPath, userDataPath: config.dataDir });
+console.log(`sd.cpp bundle: ${bundle.synced ? `installed ${bundle.version} (replaced ${bundle.replaced || 'nothing'})` : bundle.reason}`);
 
 const standin = loadEngines({ upstreamDir: config.upstreamDir, userDataPath: config.dataDir, resourcesPath: config.resourcesPath });
 const queue = new JobQueue({ run: createRunner({ config, standin }).run });
