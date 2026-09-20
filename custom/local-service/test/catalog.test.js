@@ -35,8 +35,10 @@ test('routes: sd.cpp models -> sdcpp, Qwen -> comfyui (fp16 corrupts it in WanGP
   for (const id of ['wan2gp:flux-dev', 'wan2gp:wan22-t2v', 'wan2gp:wan22-i2v', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video']) assert.equal(catalog.assess(id).route, 'wangp', id);
 });
 
-test('only Qwen-Image is marked proven on this V100', () => {
-  assert.deepEqual(catalog.staticCatalog().filter((m) => m.evidence === 'proven').map((m) => m.id), ['wan2gp:qwen-image']);
+test('evidence: only models actually run on this box are proven, and provenOn says on which GPU', () => {
+  const proven = Object.fromEntries(catalog.staticCatalog().filter((m) => m.evidence === 'proven').map((m) => [m.id, m.provenOn]));
+  assert.deepEqual(proven, { 'dreamshaper-8': ['gtx1080'], 'z-image-turbo': ['gtx1080'], 'wan2gp:qwen-image': ['v100'] });
+  for (const m of catalog.staticCatalog().filter((e) => e.evidence === 'untested')) assert.deepEqual(m.provenOn, [], m.id);
 });
 
 test('annotate merges assessments onto upstream models and flags unknown ones', () => {

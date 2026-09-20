@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build (optional) and (re)create the ogai-local container.
 #   custom/local-service/deploy.sh [--build]
-# Host-specific values come from the environment; nothing host-specific is committed:
+# Host-specific values come from the environment or $OGAI_DATA/deploy.env (KEY=VALUE lines); nothing host-specific is committed:
 #   OGAI_ARBITER_URL   gpu-arbiter base URL (empty = V100 jobs are refused)
 #   OGAI_GPU_ENABLED   1 to allow GPU jobs (default 0 - keep 0 until a GPU test window is approved)
 #   OGAI_LOCAL_PORT (8790)   OGAI_DATA (/mnt/user/appdata/open-generative-ai)
@@ -14,8 +14,9 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 NAME=ogai-local
 IMG=ogai-local:latest
-PORT=${OGAI_LOCAL_PORT:-8790}
 DATA=${OGAI_DATA:-/mnt/user/appdata/open-generative-ai}
+. "$(dirname "$0")/lib-env.sh"; load_host_env "$DATA/deploy.env"   # host-only settings; real env vars win
+PORT=${OGAI_LOCAL_PORT:-8790}
 
 [ "${1:-}" = --build ] && docker build -t "$IMG" -f custom/local-service/Dockerfile .
 

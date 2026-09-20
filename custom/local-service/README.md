@@ -33,6 +33,26 @@ OGAI_GPU_DEVICES=<GTX 1080 uuid> OGAI_ALLOWED_DEVICES=gtx1080 OGAI_DEVICE_INDEX_
 Without a `device`, small models (<= 5.5GB of weights) default to the GTX 1080 lane so they never evict the Hermes brain.
 After an image upgrade the boot-time bundle sync (`src/bundle.js`) replaces the on-volume sd-cli when `BUNDLE_VERSION` changes.
 
+## Measured on this host (2026-09-20, GTX 1080 lane, V100 not visible to the container)
+| Model | Size | Steps | Time | Peak VRAM on the card* |
+|---|---|---|---|---|
+| Dreamshaper 8 (SD 1.5) | 512x512 | 20 | 44s incl. model load | 8.0GB |
+| Z-Image Turbo | 1024x1024 | 8 | 204s | 7.5GB |
+
+\* total for the card, including the ~2GB the resident TTS container holds, so a render leaves almost no headroom for it.
+Upstream passes no offload/tiling flags to sd-cli, so bigger models than these will not fit the 1080.
+
+## Host settings file
+Per-host values (GPU uuid, arbiter url, builder image) belong in `$OGAI_DATA/deploy.env`, not in the repo:
+```
+OGAI_GPU_DEVICES=<GTX 1080 uuid>
+OGAI_ALLOWED_DEVICES=gtx1080
+OGAI_DEVICE_INDEX_1080=0
+OGAI_GPU_ENABLED=1
+```
+`deploy.sh` and `build-sdcpp.sh` read it (real environment variables win). Re-applying the Unraid template without these
+settings recreates the container WITHOUT GPU access and with GPU jobs off; use `deploy.sh`.
+
 ## Use
 ```bash
 custom/local-service/deploy.sh --build          # image + container on :8790
