@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const { withLease, codeError } = require('./gate');
+const { acquireLease, codeError, MAX_EST_SECONDS } = require('./gate');
 const { assess } = require('./catalog');
 const { getSpec, resolveFiles, prepare, buildArgs } = require('./sdcpp-models');
 const { runSdCli } = require('./sdcpp');
@@ -36,32 +36,94 @@ function loadProgressParser(upstreamDir) {
   catch { return undefined; }
 }
 
+const EST_IMAGE_SECONDS = 900;
+const EST_VIDEO_SECONDS = 1800;
+
 /**
  * Executes one queued job on one of two paths, both through the same sd-cli binary:
  * - upstream's own engine (Z-Image, SD 1.5, SDXL), which spawns sd-cli itself. The queue guarantees single-flight, which is
  *   what makes it safe to set CUDA_VISIBLE_DEVICES on process.env there: upstream's spawn() copies process.env at spawn time.
  * - our extended specs (Flux, Qwen-Image, Wan 2.2), which we spawn ourselves with an explicit env (see sdcpp-models.js).
- * Any V100 job holds an arbiter lease for its duration; the GTX 1080 is not arbiter-managed and never evicts the brain.
+ *
+ * V100 jobs hold a gpu-arbiter lease; the GTX 1080 is not arbiter-managed and never evicts the brain. A V100 lease costs the
+ * Hermes brain + TTS ~10 minutes of downtime per evict/restore cycle, so the runner OWNS the lease and keeps ONE across
+ * consecutive queued V100 jobs (sized for the whole batch) instead of paying that cost per job. The lease is released as
+ * soon as the next queued job is not a V100 job it covers, the job failed or was cancelled, nothing else is queued (after a
+ * short grace so a submit racing the end of a job can still join), or the service shuts down.
  */
-function createRunner({ config, standin, gateImpl = withLease, sdcli = runSdCli, log = console }) {
+function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, log = console, idleReleaseMs = 10_000 }) {
   const parseChunk = loadProgressParser(config.upstreamDir || '');
   const emitProgress = (data) => { if (standin.events && standin.events.emit) standin.events.emit('send', 'local-ai:progress', data); };
 
-  function withDeviceLease(job, onGtx1080, vramGb, estSeconds, call) {
-    if (onGtx1080) return call();
-    return gateImpl(config, { consumer: config.sdcppConsumer, vramGb, estSeconds, note: `ogai-local job ${job.id}` }, call, { log });
+  let held = null;   // { lease, vramGb, deadline, idleTimer }
+
+  async function dropLease() {
+    const h = held;
+    if (!h) return;
+    held = null;
+    clearTimeout(h.idleTimer);
+    await h.lease.release();
   }
 
-  async function runUpstream(job, { signal }, engineParams, onGtx1080) {
-    const call = async () => {
-      process.env.CUDA_DEVICE_ORDER = 'PCI_BUS_ID';
-      process.env.CUDA_VISIBLE_DEVICES = String(onGtx1080 ? config.deviceIndex1080 : config.deviceIndexV100);
-      const cancel = () => { standin.invoke('local-ai:cancel-generation').catch(() => {}); };
-      signal.addEventListener('abort', cancel, { once: true });
-      try { return await standin.invoke('local-ai:generate', engineParams); }
-      finally { signal.removeEventListener('abort', cancel); }
-    };
-    return withDeviceLease(job, onGtx1080, config.sdcppVramGb, 900, call);
+  const covers = (need) => Boolean(held) && need.vramGb <= held.vramGb && Date.now() + need.estSeconds * 1000 <= held.deadline;
+
+  /** Everything decided about a job before any GPU work; throws the job's real error (config, device, missing files). */
+  function describe(job) {
+    if (!config.gpuEnabled) throw codeError('GPU_DISABLED', 'GPU jobs are disabled: set OGAI_GPU_ENABLED=1 once the GPU test window is approved');
+    if (job.route !== 'sdcpp') throw codeError('ENGINE_NOT_READY', `engine route "${job.route}" is not wired yet`);
+    const { device: requested, ...engineParams } = job.params;
+    const known = assess(engineParams.model);
+    const onGtx1080 = chooseDevice(requested, config.allowedDevices, known && known.weightsGb) === 'gtx1080';
+    const spec = getSpec(engineParams.model);
+    if (!spec) return { onGtx1080, engineParams, need: { vramGb: config.sdcppVramGb, estSeconds: EST_IMAGE_SECONDS } };
+    // Everything that can fail cheaply fails HERE, before any arbiter lease: a job that cannot run must never evict the brain.
+    const params = prepare(spec, engineParams);
+    const { files, missing } = resolveFiles(spec, config.modelDirs || [], params);
+    if (missing.length) {
+      throw codeError('MODEL_FILES_MISSING', `missing model files (searched ${(config.modelDirs || []).join(', ') || 'no model dirs - set OGAI_MODEL_DIRS'}): ${missing.join(', ')}`);
+    }
+    return { onGtx1080, engineParams, spec, params, files, need: { vramGb: spec.vramGb, estSeconds: spec.kind === 'video' ? EST_VIDEO_SECONDS : EST_IMAGE_SECONDS } };
+  }
+
+  /** What a queued job would need from a shared V100 lease, or null when it cannot share one (not V100, or it would fail anyway). */
+  function needOf(job) {
+    try {
+      const d = describe(job);
+      return d.onGtx1080 ? null : d.need;
+    } catch { return null; }
+  }
+
+  /** Make sure this V100 job runs under a lease: reuse the held one if it still covers the job, else take one sized for the batch. */
+  async function ensureLease(job, need, pending) {
+    if (held && !covers(need)) await dropLease();
+    if (held) { clearTimeout(held.idleTimer); return; }
+    const batch = [need];
+    let seconds = need.estSeconds;
+    for (const next of pending) {
+      const n = needOf(next);
+      if (!n || seconds + n.estSeconds > MAX_EST_SECONDS) break;
+      batch.push(n); seconds += n.estSeconds;
+    }
+    const vramGb = Math.max(...batch.map((n) => n.vramGb));
+    const queued = batch.length - 1;
+    const lease = await acquireImpl(config, {
+      consumer: config.sdcppConsumer, vramGb, estSeconds: seconds, note: `ogai-local job ${job.id}${queued ? ` (+${queued} queued)` : ''}`,
+    }, { log });
+    held = { lease, vramGb, deadline: Date.now() + seconds * 1000, idleTimer: null };
+  }
+
+  /** After a job: keep the lease only when the very next queued job is covered by it; otherwise give the V100 back now. */
+  async function settle(succeeded, pending) {
+    if (!held) return;
+    const next = succeeded ? pending[0] : null;
+    const need = next && needOf(next);
+    if (need && covers(need)) {
+      // Safety net: if that next job never starts (cancelled in the gap), do not sit on the V100 until the arbiter's expiry.
+      held.idleTimer = setTimeout(() => { dropLease().catch((err) => log.error(`runner: idle lease release failed: ${err.message}`)); }, idleReleaseMs);
+      if (held.idleTimer.unref) held.idleTimer.unref();
+      return;
+    }
+    await dropLease();
   }
 
   function persistUpstream(job, raw) {
@@ -85,38 +147,46 @@ function createRunner({ config, standin, gateImpl = withLease, sdcli = runSdCli,
     return result;
   }
 
-  async function runExtended(job, { signal }, spec, engineParams, onGtx1080) {
-    // Everything that can fail cheaply fails HERE, before any arbiter lease: a job that cannot run must never evict the brain.
-    const params = prepare(spec, engineParams);
-    const { files, missing } = resolveFiles(spec, config.modelDirs || [], params);
-    if (missing.length) {
-      throw codeError('MODEL_FILES_MISSING', `missing model files (searched ${(config.modelDirs || []).join(', ') || 'no model dirs - set OGAI_MODEL_DIRS'}): ${missing.join(', ')}`);
-    }
+  async function runUpstream(job, { signal }, d) {
+    process.env.CUDA_DEVICE_ORDER = 'PCI_BUS_ID';
+    process.env.CUDA_VISIBLE_DEVICES = String(d.onGtx1080 ? config.deviceIndex1080 : config.deviceIndexV100);
+    const cancel = () => { standin.invoke('local-ai:cancel-generation').catch(() => {}); };
+    signal.addEventListener('abort', cancel, { once: true });
+    try { return persistUpstream(job, await standin.invoke('local-ai:generate', d.engineParams)); }
+    finally { signal.removeEventListener('abort', cancel); }
+  }
+
+  async function runExtended(job, { signal }, d) {
     fs.mkdirSync(config.tmpDir, { recursive: true });
-    const outPath = path.join(config.tmpDir, `${job.id}.${spec.ext}`);
-    const call = async () => {
-      await sdcli({
-        binary: config.sdcliPath, libDir: path.dirname(config.sdcliPath), args: buildArgs(spec, params, files, outPath),
-        env: { CUDA_DEVICE_ORDER: 'PCI_BUS_ID', CUDA_VISIBLE_DEVICES: String(onGtx1080 ? config.deviceIndex1080 : config.deviceIndexV100) },
-        signal, onProgress: emitProgress, parseChunk,
-      });
-      return persistFile(job, spec, params.seed, outPath);
-    };
-    return withDeviceLease(job, onGtx1080, spec.vramGb, spec.kind === 'video' ? 1800 : 900, call);
+    const outPath = path.join(config.tmpDir, `${job.id}.${d.spec.ext}`);
+    await sdcli({
+      binary: config.sdcliPath, libDir: path.dirname(config.sdcliPath), args: buildArgs(d.spec, d.params, d.files, outPath),
+      env: { CUDA_DEVICE_ORDER: 'PCI_BUS_ID', CUDA_VISIBLE_DEVICES: String(d.onGtx1080 ? config.deviceIndex1080 : config.deviceIndexV100) },
+      signal, onProgress: emitProgress, parseChunk,
+    });
+    return persistFile(job, d.spec, d.params.seed, outPath);
   }
 
   async function run(job, ctx) {
-    if (!config.gpuEnabled) throw codeError('GPU_DISABLED', 'GPU jobs are disabled: set OGAI_GPU_ENABLED=1 once the GPU test window is approved');
-    if (job.route !== 'sdcpp') throw codeError('ENGINE_NOT_READY', `engine route "${job.route}" is not wired yet`);
-    const { device: requested, ...engineParams } = job.params;
-    const known = assess(engineParams.model);
-    const onGtx1080 = chooseDevice(requested, config.allowedDevices, known && known.weightsGb) === 'gtx1080';
-    const spec = getSpec(engineParams.model);
-    if (spec) return runExtended(job, ctx, spec, engineParams, onGtx1080);
-    return persistUpstream(job, await runUpstream(job, ctx, engineParams, onGtx1080));
+    if (held) clearTimeout(held.idleTimer);
+    const pending = () => (ctx.pending ? ctx.pending() : []);
+    let succeeded = false;
+    try {
+      const d = describe(job);
+      if (d.onGtx1080) await dropLease();                       // a held lease is never needed for the 1080; do not sit on the V100
+      else await ensureLease(job, d.need, pending());
+      const result = await (d.spec ? runExtended(job, ctx, d) : runUpstream(job, ctx, d));
+      succeeded = true;
+      return result;
+    } finally {
+      await settle(succeeded, pending());
+    }
   }
 
-  return { run };
+  /** Release any held V100 lease now (service shutdown). Callers stop running work first; a repeat release is a no-op. */
+  const shutdown = () => dropLease();
+
+  return { run, shutdown };
 }
 
 module.exports = { createRunner };

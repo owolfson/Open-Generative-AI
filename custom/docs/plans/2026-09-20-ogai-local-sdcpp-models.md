@@ -49,7 +49,7 @@
 
 ### Task 5: One V100 lease across a queued batch + stale-lease release at boot
 
-**Interfaces:** `JobQueue` passes `{ signal, peek() }` to `run` (`peek` = next pending job or null). `gate.acquireLease(cfg, opts) -> { leaseId, release() }` (`withLease` reuses it). Runner keeps the lease while the next pending job is a V100 job needing <= the leased VRAM; releases on failure, non-V100 next, bigger next, or no next. `releaseStaleLease(cfg, fetchImpl)` posts `/release {consumer}` at boot (best effort).
+**Interfaces (as built):** `JobQueue` passes `{ signal, pending() }` to `run` (`pending()` = jobs queued behind the running one, in order) and has `drain(timeoutMs)` for shutdown. `gate.acquireLease(cfg, opts, deps) -> { leaseId, release() }` (idempotent release; `withLease` is built on it; est_seconds capped at the arbiter's 14400). The runner owns the lease: it is sized for the running job plus the consecutive covered V100 jobs behind it (max VRAM, summed est_seconds, note `(+N queued)`), reused while the next job is a V100 job that fits the leased VRAM and remaining time, and released on failure/cancel, non-V100 next, bigger next, no next (10s idle grace), or `runner.shutdown()`. Jobs that would fail before the lease (missing files, bad params) never count as covered. `releaseStaleLease(cfg)` posts `/release {consumer}` at boot (best effort, never throws). SIGTERM: `queue.drain()` stops sd-cli first, then the lease is released.
 
 - [ ] Tests (fake gate counting acquire/release: two V100 jobs -> 1 acquire; bigger second -> re-acquire; failure -> release; non-V100 next -> release; stale release posts once, tolerates failure) -> fail -> implement -> pass -> commit.
 

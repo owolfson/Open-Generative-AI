@@ -94,3 +94,15 @@ test('list is newest first and old finished jobs are trimmed past maxJobs', asyn
   assert.equal(listed[0].id, ids[4]);
   assert.equal(q.get(ids[0]), null);
 });
+
+test('run receives pending(): the jobs queued behind the running one, in order (used to keep one GPU lease across a batch)', async () => {
+  const seen = [];
+  const gate = (() => { let r; const promise = new Promise((res) => { r = res; }); return { promise, resolve: r }; })();
+  const q = new JobQueue({ run: async (job, { pending }) => { seen.push([job.params.n, pending().map((j) => j.params.n)]); if (job.params.n === 1) await gate.promise; return job.params.n; } });
+  const a = q.submit({ kind: 'image', route: 'sdcpp', params: { n: 1 } });
+  q.submit({ kind: 'image', route: 'sdcpp', params: { n: 2 } });
+  const c = q.submit({ kind: 'image', route: 'sdcpp', params: { n: 3 } });
+  await new Promise((r) => setImmediate(r));
+  gate.resolve(); await q.wait(a.id, 1000); await q.wait(c.id, 1000);
+  assert.deepEqual(seen, [[1, [2, 3]], [2, [3]], [3, []]]);
+});

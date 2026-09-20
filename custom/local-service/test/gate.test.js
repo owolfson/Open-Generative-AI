@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { withLease } = require('../src/gate');
+const { withLease, acquireLease, releaseStaleLease } = require('../src/gate');
 const { startFakeArbiter } = require('./helpers/fake-arbiter');
 
 const quiet = () => { const logs = { warn: [], error: [] }; return { logs, log: { warn: (m) => logs.warn.push(m), error: (m) => logs.error.push(m) } }; };
@@ -64,4 +64,35 @@ test('an unreachable arbiter on release is logged and does not mask the result',
     assert.equal(await withLease({ arbiterUrl: arb.url }, opts, async () => 'result', { fetchImpl: flaky, log }), 'result');
     assert.equal(logs.error.length, 1);
   } finally { await arb.close(); }
+});
+
+test('acquireLease returns a handle whose release is idempotent (exactly one POST /release)', async () => {
+  const arb = await startFakeArbiter();
+  try {
+    const lease = await acquireLease({ arbiterUrl: arb.url }, opts, { log: quiet().log });
+    assert.equal(lease.leaseId, 'lease-1');
+    await lease.release(); await lease.release();
+    assert.equal(arb.calls.filter((c) => c.path === '/release').length, 1);
+    assert.deepEqual(arb.calls.find((c) => c.path === '/release').body, { lease_id: 'lease-1', consumer: 'ogai-local' });
+  } finally { await arb.close(); }
+});
+
+test('acquireLease refuses without an arbiter and surfaces a 409 as ARBITER_REFUSED', async () => {
+  await assert.rejects(() => acquireLease({ arbiterUrl: '' }, opts), { code: 'ARBITER_UNCONFIGURED' });
+  const arb = await startFakeArbiter({ grant: false });
+  try { await assert.rejects(() => acquireLease({ arbiterUrl: arb.url }, opts, { log: quiet().log }), { code: 'ARBITER_REFUSED' }); } finally { await arb.close(); }
+});
+
+test('releaseStaleLease releases by consumer name at boot and never throws', async () => {
+  const arb = await startFakeArbiter({ releaseNote: 'released after 400.0s' });
+  try {
+    const out = await releaseStaleLease({ arbiterUrl: arb.url, sdcppConsumer: 'ogai-local' }, { log: quiet().log });
+    assert.deepEqual(arb.calls.map((c) => [c.path, c.body]), [['/release', { consumer: 'ogai-local' }]]);
+    assert.equal(out.released, true);
+  } finally { await arb.close(); }
+  const idle = await startFakeArbiter({ releaseNote: 'not the active holder (active=hermes)' });
+  try { assert.equal((await releaseStaleLease({ arbiterUrl: idle.url, sdcppConsumer: 'ogai-local' }, { log: quiet().log })).released, false); } finally { await idle.close(); }
+  assert.deepEqual(await releaseStaleLease({ arbiterUrl: '', sdcppConsumer: 'ogai-local' }, { log: quiet().log }), { released: false, reason: 'no arbiter configured' });
+  const down = await releaseStaleLease({ arbiterUrl: 'http://127.0.0.1:1', sdcppConsumer: 'ogai-local' }, { log: quiet().log });
+  assert.equal(down.released, false);
 });

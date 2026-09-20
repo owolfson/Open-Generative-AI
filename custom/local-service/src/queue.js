@@ -42,6 +42,16 @@ class JobQueue extends EventEmitter {
     return true;
   }
 
+  /** Shutdown helper: cancel everything queued, abort the running job, and resolve once the worker is idle (or after timeoutMs). */
+  async drain(timeoutMs = 8000) {
+    for (const id of [...this.pending]) this.cancel(id);
+    if (this.current) {
+      const id = this.current.id;
+      this.cancel(id);
+      await this.wait(id, timeoutMs);
+    }
+  }
+
   wait(id, timeoutMs = 0) {
     const job = this.get(id);
     if (!job || TERMINAL.has(job.status) || timeoutMs <= 0) return Promise.resolve(job);
@@ -62,7 +72,7 @@ class JobQueue extends EventEmitter {
     job.startedAt = this.now();
     this.emit('update', job);
     try {
-      job.result = await this.run(job, { signal: controller.signal });
+      job.result = await this.run(job, { signal: controller.signal, pending: () => this.pending.map((id) => this.jobs.get(id)) });
       this.#finish(job, 'done');
     } catch (err) {
       job.error = { code: err.code || 'ERROR', message: err.message };
