@@ -46,7 +46,7 @@ function createServer({ config, standin, queue, service, mcp }) {
     const { pathname } = url;
     const method = req.method;
 
-    if (method === 'GET' && pathname === '/health') return send(res, 200, { ok: true, gpuEnabled: config.gpuEnabled, channels: standin.channels().length });
+    if (method === 'GET' && pathname === '/health') return send(res, 200, { ok: true, gpuEnabled: config.gpuEnabled, allowedDevices: config.allowedDevices, channels: standin.channels().length });
 
     if (!config.token) return send(res, 503, { error: 'OGAI_TOKEN is not configured' });
     if (!bearerOk(req.headers.authorization, config.token)) return send(res, 401, { error: 'unauthorized' });

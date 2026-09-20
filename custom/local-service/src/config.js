@@ -11,6 +11,7 @@ function loadConfig(env = process.env) {
     resourcesPath: env.OGAI_RESOURCES_PATH || '',           // holds local-ai/<platform>-<arch>/bin/sd-cli
     token: env.OGAI_TOKEN || '',
     gpuEnabled: env.OGAI_GPU_ENABLED === '1',               // safety switch: nothing touches a GPU unless this is exactly "1"
+    allowedDevices: (env.OGAI_ALLOWED_DEVICES || 'v100,gtx1080').split(',').map((d) => d.trim().toLowerCase()).filter((d) => d === 'v100' || d === 'gtx1080'),
     arbiterUrl: (env.OGAI_ARBITER_URL || '').replace(/\/+$/, ''),
     sdcppConsumer: (env.OGAI_SDCPP_CONSUMER || 'ogai-local').toLowerCase(),
     sdcppVramGb: Number(env.OGAI_SDCPP_VRAM_GB || 10),

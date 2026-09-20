@@ -32,7 +32,7 @@ const LOCAL_TOOLS = [
         seed: { type: 'integer', description: '-1 or omitted = random' },
         steps: { type: 'integer' },
         guidance_scale: { type: 'number' },
-        device: { type: 'string', enum: ['v100', 'gtx1080'], description: 'gtx1080 never evicts the Hermes brain (small models only)' },
+        device: { type: 'string', enum: ['v100', 'gtx1080'], description: 'Default: gtx1080 for small models (never evicts the Hermes brain), v100 for big ones. Only devices enabled on this deployment are accepted.' },
         wait_seconds: { type: 'integer', minimum: 0, maximum: 600, description: 'Wait up to this long for completion (default 0 = return immediately)' },
       },
     },

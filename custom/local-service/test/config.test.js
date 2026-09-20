@@ -29,3 +29,9 @@ test('overrides are honoured and the arbiter url loses trailing slashes', () => 
   assert.equal(c.sdcppConsumer, 'mycons');
   assert.equal(c.deviceIndex1080, 2);
 });
+
+test('allowed devices default to both GPUs; values are trimmed, lower-cased and junk is ignored', () => {
+  assert.deepEqual(loadConfig({}).allowedDevices, ['v100', 'gtx1080']);
+  assert.deepEqual(loadConfig({ OGAI_ALLOWED_DEVICES: 'gtx1080' }).allowedDevices, ['gtx1080']);
+  assert.deepEqual(loadConfig({ OGAI_ALLOWED_DEVICES: ' GTX1080 , nonsense ,v100' }).allowedDevices, ['gtx1080', 'v100']);
+});

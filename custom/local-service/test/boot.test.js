@@ -32,6 +32,7 @@ test('boots for real: health, auth, 12-model catalog, MCP handshake, GPU jobs re
     const health = await (await waitFor(`${base}/health`)).json();
     assert.equal(health.gpuEnabled, false);
     assert.equal(health.channels, 15);
+    assert.deepEqual(health.allowedDevices, ['v100', 'gtx1080']);
     assert.equal((await fetch(`${base}/api/local/catalog`)).status, 401);
 
     const { models, excluded } = await (await fetch(`${base}/api/local/catalog`, { headers: auth })).json();

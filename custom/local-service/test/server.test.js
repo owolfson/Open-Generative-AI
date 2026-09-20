@@ -31,7 +31,7 @@ async function boot({ token = 'tok', run } = {}) {
   const queue = new JobQueue({ run: run || (async () => ({ seed: 5, file: 'x.png', url: '/outputs/x.png', dataUrl: DATA_URL })) });
   const service = createService({ standin, queue });
   const mcp = { handle: async (msg) => (msg.method === 'notifications/initialized' ? null : { jsonrpc: '2.0', id: msg.id, result: { echoed: msg.method } }) };
-  const server = createServer({ config: { token, gpuEnabled: true, outputsDir }, standin, queue, service, mcp });
+  const server = createServer({ config: { token, gpuEnabled: true, outputsDir, allowedDevices: ['gtx1080'] }, standin, queue, service, mcp });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   return { base, standin, queue, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) };
@@ -45,6 +45,7 @@ test('/health is open; everything else needs the bearer token', async () => {
     const health = await (await fetch(`${app.base}/health`)).json();
     assert.equal(health.ok, true);
     assert.equal(health.channels, 3);
+    assert.deepEqual(health.allowedDevices, ['gtx1080']);
     assert.equal((await fetch(`${app.base}/api/local/catalog`)).status, 401);
     assert.equal((await fetch(`${app.base}/api/local/catalog`, { headers: { authorization: 'Bearer wrong' } })).status, 401);
     assert.equal((await fetch(`${app.base}/api/local/catalog`, { headers: auth })).status, 200);
