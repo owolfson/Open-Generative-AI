@@ -30,7 +30,9 @@ The container only sees the GPUs you pass in. First deployment - GTX 1080 only, 
 ```bash
 OGAI_GPU_DEVICES=<GTX 1080 uuid> OGAI_ALLOWED_DEVICES=gtx1080 OGAI_DEVICE_INDEX_1080=0 OGAI_GPU_ENABLED=1 custom/local-service/deploy.sh
 ```
-Without a `device`, small models (<= 5.5GB of weights) default to the GTX 1080 lane so they never evict the Hermes brain.
+Without a `device`, models that fit the GTX 1080 (<= 5.5GB of weights) run there and never evict the Hermes brain. Anything bigger
+must ask for `device: "v100"` explicitly (otherwise `DEVICE_REQUIRED`): a V100 job goes through the GPU arbiter, which stops the Hermes
+brain and the TTS for the duration of the job and restores them afterwards.
 After an image upgrade the boot-time bundle sync (`src/bundle.js`) replaces the on-volume sd-cli when `BUNDLE_VERSION` changes.
 
 ## Measured on this host (2026-09-20, GTX 1080 lane, V100 not visible to the container)

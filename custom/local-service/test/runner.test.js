@@ -78,15 +78,20 @@ test('aborting the signal cancels the running sd.cpp process', async () => {
   await pending;
 });
 
-test('device policy: small models default to the GTX 1080 lane (no brain eviction), big ones to the V100', async () => {
+test('device policy: small models default to the GTX 1080 lane; a model that needs the V100 must ask for it explicitly', async () => {
   const small = fakes();
   await createRunner({ config: config(), standin: small.standin, gateImpl: small.gate.impl, log: quiet }).run(job(), ctx());   // z-image-turbo, 5.2GB
   assert.equal(small.gate.calls.length, 0);
   assert.equal(small.standin.envAtGenerate, '1');
 
   const big = fakes();
-  await createRunner({ config: config(), standin: big.standin, gateImpl: big.gate.impl, log: quiet }).run(job({ params: { model: 'stable-diffusion-xl-base', prompt: 'x' } }), ctx());   // 6.9GB
-  assert.equal(big.gate.calls.length, 1);
+  const rb = createRunner({ config: config(), standin: big.standin, gateImpl: big.gate.impl, log: quiet });
+  await assert.rejects(() => rb.run(job({ params: { model: 'stable-diffusion-xl-base', prompt: 'x' } }), ctx()),   // 6.9GB
+    (err) => err.code === 'DEVICE_REQUIRED' && /v100/.test(err.message) && /Hermes brain/.test(err.message));
+  assert.equal(big.gate.calls.length, 0);          // never touched the arbiter
+  assert.equal(big.standin.calls.length, 0);        // never ran anything
+  await rb.run(job({ params: { model: 'stable-diffusion-xl-base', prompt: 'x', device: 'v100' } }), ctx());
+  assert.equal(big.gate.calls.length, 1);           // an explicit request goes through the arbiter
   assert.equal(big.standin.envAtGenerate, '0');
 });
 

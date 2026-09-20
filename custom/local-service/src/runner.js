@@ -12,10 +12,17 @@ function chooseDevice(requested, allowed, weightsGb) {
     if (!allowed.includes(requested)) throw codeError('DEVICE_NOT_ALLOWED', `device ${requested} is not enabled on this deployment (allowed: ${allowed.join(', ') || 'none'})`);
     return requested;
   }
-  // No device asked for: prefer the lane that never evicts the Hermes brain, when the model fits it.
+  // No device asked for. The V100 is never chosen implicitly while the GTX 1080 exists: a V100 lease stops the
+  // Hermes brain and the TTS, so a caller must ask for it by name.
   const fits1080 = typeof weightsGb === 'number' && weightsGb <= GTX1080_MAX_WEIGHTS_GB;
-  if (allowed.includes('gtx1080') && (fits1080 || !allowed.includes('v100'))) return 'gtx1080';
-  if (allowed.includes('v100')) return 'v100';
+  const has1080 = allowed.includes('gtx1080');
+  const hasV100 = allowed.includes('v100');
+  if (has1080 && fits1080) return 'gtx1080';
+  if (hasV100 && !has1080) return 'v100';           // V100-only deployment: nothing to choose between
+  if (has1080 && !hasV100) return 'gtx1080';        // 1080-only deployment: the engine reports if it does not fit
+  if (has1080 && hasV100) {
+    throw codeError('DEVICE_REQUIRED', 'this model does not fit the GTX 1080; pass device:"v100" to run it on the V100 (that stops the Hermes brain and the TTS for the duration of the job)');
+  }
   throw codeError('DEVICE_NOT_ALLOWED', 'no GPU device is enabled (OGAI_ALLOWED_DEVICES)');
 }
 
