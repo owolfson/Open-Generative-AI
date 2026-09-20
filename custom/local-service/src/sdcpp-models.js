@@ -79,10 +79,23 @@ function resolveFiles(spec, dirs, params = {}) {
   return { files, missing };
 }
 
+// aspect_ratio -> 64-aligned dimensions (same idea as upstream's arToDimensions): base 1024 for images, 480 for video.
+function dimsFor(kind, ar) {
+  const base = kind === 'video' ? 480 : 1024;
+  const align = (v) => Math.round(v / 64) * 64;
+  return {
+    '1:1': [base, base], '16:9': [align((base * 16) / 9), base], '9:16': [base, align((base * 16) / 9)],
+    '4:3': [align((base * 4) / 3), base], '3:4': [base, align((base * 4) / 3)],
+  }[ar] || null;
+}
+
 /** Merge defaults with the caller's params, pick a seed, and enforce required inputs. */
 function prepare(spec, params) {
   const given = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
   const p = { ...spec.defaults(given), ...given };
+  const dims = given.aspect_ratio ? dimsFor(spec.kind, given.aspect_ratio) : null;
+  if (dims) { if (given.width === undefined) p.width = dims[0]; if (given.height === undefined) p.height = dims[1]; }
+  if (given.guidance_scale !== undefined && given.cfg_scale === undefined) p.cfg_scale = Number(given.guidance_scale);   // upstream's name for it
   const seed = Number(p.seed);
   p.seed = Number.isInteger(seed) && seed > 0 ? seed : randomInt(1, 2147483647);
   if (spec.needsImage && !p.init_image) throw codeError('IMAGE_REQUIRED', 'this model needs an input image (image_job_id or image_base64)');

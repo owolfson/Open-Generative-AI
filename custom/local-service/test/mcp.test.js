@@ -42,7 +42,7 @@ test('initialize / ping / initialized handshake', async () => {
 test('tools/list without a Muapi key exposes only the local tools', async () => {
   const { mcp } = setup({ key: null });
   const names = (await mcp.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' })).result.tools.map((t) => t.name);
-  assert.deepEqual(names, ['local_list_models', 'local_generate_image', 'local_job_status', 'local_cancel_job']);
+  assert.deepEqual(names, ['local_list_models', 'local_generate_image', 'local_generate_video', 'local_job_status', 'local_cancel_job']);
 });
 
 test('tools/list adds ONLY allowlisted Muapi tools: key management, top-up and brand-new tools stay blocked', async () => {
@@ -112,4 +112,32 @@ test('local_generate_image without waiting returns the queued job; bad input is 
   assert.match(bad.result.content[0].text, /UNKNOWN_MODEL/);
   const missing = await call(mcp, 'local_job_status', { job_id: 'nope' });
   assert.equal(missing.result.isError, true);
+});
+
+test('local_generate_video queues a video job chained from an earlier image job; the tools refuse the wrong kind of model', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-mcpv-'));
+  const cfg = { outputsDir: path.join(dir, 'o'), tmpDir: path.join(dir, 't'), muapiKeyFile: keyFile(null), muapiMcpUrl: 'http://127.0.0.1:1/mcp' };
+  fs.mkdirSync(cfg.outputsDir, { recursive: true });
+  const queue = new JobQueue({ run: async (job) => job.params.__result || { seed: 1, file: 'z.avi', url: '/outputs/z.avi', kind: 'video' } });
+  const service = createService({ standin, queue, config: cfg });
+  const mcp = createMcp({ config: cfg, queue, service, log: quiet });
+
+  fs.writeFileSync(path.join(cfg.outputsDir, 'img.png'), 'x');
+  const imgJob = queue.submit({ kind: 'image', route: 'sdcpp', params: { __result: { kind: 'image', file: 'img.png', url: '/outputs/img.png' } } });
+  await queue.wait(imgJob.id, 1000);
+
+  const ok = bodyOf(await call(mcp, 'local_generate_video', { model: 'wan2gp:wan22-i2v', prompt: 'it moves', image_job_id: imgJob.id, device: 'v100', wait_seconds: 5 }));
+  assert.equal(ok.status, 'done');
+  assert.equal(ok.result.kind, 'video');
+
+  const wrongImage = await call(mcp, 'local_generate_image', { model: 'wan2gp:wan22-i2v', prompt: 'x', image_job_id: imgJob.id });
+  assert.equal(wrongImage.result.isError, true);
+  assert.match(wrongImage.result.content[0].text, /WRONG_KIND.*local_generate_video/);
+  const wrongVideo = await call(mcp, 'local_generate_video', { model: 'wan2gp:flux-dev', prompt: 'x' });
+  assert.equal(wrongVideo.result.isError, true);
+  assert.match(wrongVideo.result.content[0].text, /WRONG_KIND.*local_generate_image/);
+
+  const noImage = await call(mcp, 'local_generate_video', { model: 'wan2gp:wan22-i2v', prompt: 'x' });
+  assert.equal(noImage.result.isError, true);
+  assert.match(noImage.result.content[0].text, /IMAGE_REQUIRED/);
 });

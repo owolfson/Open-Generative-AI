@@ -120,3 +120,21 @@ test('Wan 2.2 I2V needs an init image; explicit size/frames/fps overrides are ho
   const args = buildArgs(spec, prepare(spec, { prompt: 'x', init_image: '/i.png', width: 480, height: 832, video_frames: 17, fps: 8 }), WAN_FILES, '/o.avi');
   assert.ok(pair(args, '-W', 480)); assert.ok(pair(args, '-H', 832)); assert.ok(pair(args, '--video-frames', 17)); assert.ok(pair(args, '--fps', 8));
 });
+
+test('aspect_ratio maps to dimensions (64-aligned, base 1024 for images, 480 for video); explicit width/height win', () => {
+  const flux = getSpec('wan2gp:flux-dev'); const wan = getSpec('wan2gp:wan22-i2v');
+  const dims = (spec, extra) => { const p = prepare(spec, { prompt: 'x', init_image: '/i.png', ...extra }); return [p.width, p.height]; };
+  assert.deepEqual(dims(flux, { aspect_ratio: '1:1' }), [1024, 1024]);
+  assert.deepEqual(dims(flux, { aspect_ratio: '16:9' }), [1792, 1024]);
+  assert.deepEqual(dims(flux, { aspect_ratio: '9:16' }), [1024, 1792]);
+  assert.deepEqual(dims(flux, { aspect_ratio: '4:3' }), [1344, 1024]);
+  assert.deepEqual(dims(wan, { aspect_ratio: '9:16' }), [480, 832]);
+  assert.deepEqual(dims(wan, { aspect_ratio: '16:9' }), [832, 480]);
+  assert.deepEqual(dims(flux, { aspect_ratio: '16:9', width: 512, height: 512 }), [512, 512]);
+  assert.deepEqual(dims(flux, { aspect_ratio: 'nonsense' }), [1024, 1024]);
+});
+
+test('guidance_scale (upstream naming) is accepted as cfg_scale', () => {
+  assert.equal(prepare(getSpec('wan2gp:qwen-image'), { prompt: 'x', guidance_scale: 4 }).cfg_scale, 4);
+  assert.equal(prepare(getSpec('wan2gp:qwen-image'), { prompt: 'x', guidance_scale: 4, cfg_scale: 3 }).cfg_scale, 3);
+});

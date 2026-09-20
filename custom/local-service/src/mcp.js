@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('node:fs');
 const { publicJob } = require('./server');
+const catalog = require('./catalog');
 
 const PROTOCOL = '2025-06-18';
 
@@ -32,8 +33,36 @@ const LOCAL_TOOLS = [
         seed: { type: 'integer', description: '-1 or omitted = random' },
         steps: { type: 'integer' },
         guidance_scale: { type: 'number' },
+        width: { type: 'integer', description: 'Pixels; overrides aspect_ratio (extended models: Flux, Qwen-Image)' },
+        height: { type: 'integer' },
+        cfg_scale: { type: 'number', description: 'Guidance; each model has a tuned default' },
         device: { type: 'string', enum: ['v100', 'gtx1080'], description: 'Default: gtx1080 for models that fit it. Anything bigger needs device:"v100" explicitly - that runs through the GPU arbiter and stops the Hermes brain and the TTS for the duration of the job. Only devices enabled on this deployment are accepted.' },
         wait_seconds: { type: 'integer', minimum: 0, maximum: 600, description: 'Wait up to this long for completion (default 0 = return immediately)' },
+      },
+    },
+  },
+  {
+    name: 'local_generate_video',
+    description: 'Image-to-video on the local V100 (Wan 2.2, avi output). Needs an input image: image_job_id (a finished local_generate_image job - this chains text -> image -> video) or image_base64 (PNG/JPEG). Runs through the GPU arbiter, which stops the Hermes brain and the TTS for the duration; the result url is served under /outputs.',
+    inputSchema: {
+      type: 'object',
+      required: ['model', 'prompt'],
+      properties: {
+        model: { type: 'string', description: 'A video model id from local_list_models (kind video)' },
+        prompt: { type: 'string', description: 'What should move / happen' },
+        image_job_id: { type: 'string', description: 'A finished local_generate_image job whose image becomes the first frame' },
+        image_base64: { type: 'string', description: 'PNG or JPEG, raw base64 or a data URL (max 10MB)' },
+        aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
+        width: { type: 'integer' },
+        height: { type: 'integer' },
+        video_frames: { type: 'integer', description: 'Default 33 (about 2s at 16 fps)' },
+        fps: { type: 'integer', description: 'Default 16' },
+        steps: { type: 'integer' },
+        fast: { type: 'boolean', description: 'Default true: 4-step lightx2v LoRAs. false = quality mode (10+8 steps, no LoRA; slower)' },
+        seed: { type: 'integer' },
+        negative_prompt: { type: 'string' },
+        device: { type: 'string', enum: ['v100'], description: 'Video models only fit the V100 - pass "v100" explicitly' },
+        wait_seconds: { type: 'integer', minimum: 0, maximum: 600 },
       },
     },
   },
@@ -98,8 +127,13 @@ function createMcp({ config, queue, service, fetchImpl = fetch, log = console })
 
   async function callLocal(name, args) {
     if (name === 'local_list_models') return textResult(await listModels(args));
-    if (name === 'local_generate_image') {
+    if (name === 'local_generate_image' || name === 'local_generate_video') {
+      const wanted = name === 'local_generate_image' ? 'image' : 'video';
       const { wait_seconds: waitSeconds = 0, ...params } = args;
+      const meta = catalog.assess(params.model);
+      if (meta && meta.kind !== wanted) {
+        throw Object.assign(new Error(`${params.model} is a ${meta.kind} model; use ${meta.kind === 'video' ? 'local_generate_video' : 'local_generate_image'}`), { code: 'WRONG_KIND' });
+      }
       const job = service.submitGeneration(params);
       const seen = waitSeconds > 0 ? await queue.wait(job.id, Math.min(600, waitSeconds) * 1000) : job;
       return textResult(jobView(seen));
