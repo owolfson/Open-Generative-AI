@@ -95,7 +95,9 @@ test('Wan 2.2 I2V: both experts, sd.cpp quality recipe (10+8 steps, cfg 3.5 both
   assert.ok(pair(args, '--steps', 10)); assert.ok(pair(args, '--high-noise-steps', 8));
   assert.ok(pair(args, '--cfg-scale', 3.5)); assert.ok(pair(args, '--high-noise-cfg-scale', 3.5));
   assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--flow-shift', 3));
-  assert.ok(pair(args, '-W', 640)); assert.ok(pair(args, '-H', 368)); assert.ok(args.includes('--offload-to-cpu')); assert.ok(pair(args, '-n', NEG_WAN));
+  assert.ok(pair(args, '-W', 640)); assert.ok(pair(args, '-H', 368)); assert.ok(pair(args, '-n', NEG_WAN));
+  // memory placement, all measured on this host: T5's params live in RAM (6.4GB), everything else stays on the V100; NOT --offload-to-cpu (23.5GB of shmem, OOM-killed)
+  assert.ok(pair(args, '--params-backend', 'te=cpu')); assert.equal(args.includes('--offload-to-cpu'), false); assert.ok(args.includes('--vae-tiling'));
   assert.ok(args.includes('--diffusion-fa'));
 });
 

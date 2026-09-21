@@ -28,7 +28,7 @@ const SPECS = {
       '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', '--flow-shift', str(p.flow_shift), ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
   },
   'wan2gp:wan22-i2v': {
-    id: 'wan2gp:wan22-i2v', kind: 'video', ext: 'avi', vramGb: 27, needsImage: true,
+    id: 'wan2gp:wan22-i2v', kind: 'video', ext: 'avi', vramGb: 28, needsImage: true,   // vramGb: measured peak 27.4GB
     files: {
       diffusion: 'Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
@@ -45,8 +45,12 @@ const SPECS = {
       '--high-noise-cfg-scale', str(p.high_noise_cfg_scale), '--sampling-method', 'euler', '--high-noise-sampling-method', 'euler',
       '--high-noise-steps', str(p.high_noise_steps), '-n', p.negative_prompt || NEG_WAN, '--diffusion-fa',
       '--video-frames', str(p.video_frames), '--fps', str(p.fps), '--flow-shift', str(p.flow_shift), '-i', p.init_image,
-      '--offload-to-cpu',   // measured on the V100: without it the 3D-VAE decode runs out of memory
-      '--vae-tiling'],      // sd.cpp's own Wan recipe pairs it with --offload-to-cpu
+      // Memory placement, measured on the V100 + this 48GB host (quality mode, 640x368, 33 frames):
+      //   --params-backend te=cpu  T5's params (6.4GB) in RAM, computed on the GPU, the rest on the V100: WORKS. 377s, peak 27.4GB, host RAM never below 12GB free
+      //   (no flag)                all weights on the V100: sampling ok, then the VAE decode fails 'weight preparation' (31.5GB peak)
+      //   --offload-to-cpu         worked once for Gemini, but it is 23.5GB of shmem: with the other containers the kernel OOM-killed sd-cli
+      //   --max-vram 22            fails in the diffusion ('wan.blocks.23 failed during weight preparation');  --backend te=cpu: SIGSEGV
+      '--params-backend', 'te=cpu', '--vae-tiling'],
   },
 };
 
