@@ -110,8 +110,8 @@ test('Wan fast mode (lightx2v LoRAs) is refused up front with a reason: sd.cpp a
 test('Wan 2.2 I2V needs an init image; explicit size/frames/fps overrides are honoured', () => {
   const spec = getSpec('wan2gp:wan22-i2v');
   assert.throws(() => prepare(spec, { prompt: 'x' }), { code: 'IMAGE_REQUIRED' });
-  const args = buildArgs(spec, prepare(spec, { prompt: 'x', init_image: '/i.png', width: 480, height: 832, video_frames: 17, fps: 8 }), WAN_FILES, '/o.avi');
-  assert.ok(pair(args, '-W', 480)); assert.ok(pair(args, '-H', 832)); assert.ok(pair(args, '--video-frames', 17)); assert.ok(pair(args, '--fps', 8));
+  const args = buildArgs(spec, prepare(spec, { prompt: 'x', init_image: '/i.png', width: 368, height: 640, video_frames: 17, fps: 8 }), WAN_FILES, '/o.avi');
+  assert.ok(pair(args, '-W', 368)); assert.ok(pair(args, '-H', 640)); assert.ok(pair(args, '--video-frames', 17)); assert.ok(pair(args, '--fps', 8));
 });
 
 const VIDEO_AREA_OK = ([w, h]) => w * h <= 640 * 368 * 1.1 && w % 16 === 0 && h % 16 === 0;
@@ -120,9 +120,9 @@ test('aspect_ratio maps to dimensions (images 64-aligned off base 1024; video = 
   const flux = getSpec('wan2gp:flux-dev'); const wan = getSpec('wan2gp:wan22-i2v');
   const dims = (spec, extra) => { const p = prepare(spec, { prompt: 'x', init_image: '/i.png', ...extra }); return [p.width, p.height]; };
   assert.deepEqual(dims(flux, { aspect_ratio: '1:1' }), [1024, 1024]);
-  assert.deepEqual(dims(flux, { aspect_ratio: '16:9' }), [1792, 1024]);
-  assert.deepEqual(dims(flux, { aspect_ratio: '9:16' }), [1024, 1792]);
-  assert.deepEqual(dims(flux, { aspect_ratio: '4:3' }), [1344, 1024]);
+  assert.deepEqual(dims(flux, { aspect_ratio: '16:9' }), [1344, 768]);   // ~1 MP like the measured 1024x1024 (1792x1024 was never run and would not fit)
+  assert.deepEqual(dims(flux, { aspect_ratio: '9:16' }), [768, 1344]);
+  assert.deepEqual(dims(flux, { aspect_ratio: '4:3' }), [1152, 896]);
   assert.deepEqual(dims(wan, { aspect_ratio: '9:16' }), [368, 640]);
   assert.deepEqual(dims(wan, { aspect_ratio: '16:9' }), [640, 368]);
   assert.ok(VIDEO_AREA_OK(dims(wan, { aspect_ratio: '4:3' })) && VIDEO_AREA_OK(dims(wan, { aspect_ratio: '1:1' })), 'every video ratio stays near the measured-safe pixel area');
@@ -235,4 +235,36 @@ test('Z-Image Base: 1080 only, 768-based sizes (the 1080 renders it via host-RAM
   assert.deepEqual(spec.devices, ['gtx1080']); assert.match(spec.deviceNote, /blank/);
   const p = prepare(spec, { prompt: 'x', aspect_ratio: '1:1' });
   assert.deepEqual([p.width, p.height], [768, 768]); assert.equal(p.steps, 20);
+});
+
+// ---------- measured-safe limits: a request must not be able to take the V100 down (or run past the lease window) ----------
+test('every ratio of an extended image model stays within its measured pixel area', () => {
+  for (const id of ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'z-image-base']) {
+    const spec = getSpec(id);
+    for (const ar of ['1:1', '16:9', '9:16', '4:3', '3:4']) assert.doesNotThrow(() => prepare(spec, { prompt: 'x', aspect_ratio: ar }), `${id} ${ar}`);
+  }
+});
+
+test('PARAM_LIMIT: sizes, frame counts and step counts beyond what was measured are refused before any lease', () => {
+  const refuse = (id, extra) => assert.throws(() => prepare(getSpec(id), { prompt: 'x', init_image: '/i.png', ...extra }), (e) => e.code === 'PARAM_LIMIT', `${id} ${JSON.stringify(extra)}`);
+  refuse('wan2gp:wan22-i2v', { width: 832, height: 480 });                 // measured: out of memory in the VAE decode
+  refuse('wan2gp:wan22-t2v', { video_frames: 81 }); refuse('wan2gp:wan22-t2v', { width: 4096, height: 4096 });
+  refuse('wan2gp:hunyuan-video', { width: 1280, height: 720 }); refuse('wan2gp:hunyuan-video', { video_frames: 129 });
+  refuse('wan2gp:flux-dev', { width: 4096, height: 4096 }); refuse('wan2gp:flux-dev', { steps: 100000 });
+  refuse('wan2gp:qwen-image', { width: 3000, height: 3000 }); refuse('wan2gp:qwen-image', { steps: 5000 });
+  refuse('z-image-base', { width: 4096, height: 4096 });
+  refuse('wan2gp:wan22-t2v', { steps: 500 }); refuse('wan2gp:wan22-t2v', { high_noise_steps: 500 });
+  // what WAS measured is still allowed
+  for (const [id, ok] of [['wan2gp:wan22-i2v', { width: 640, height: 368, video_frames: 33 }], ['wan2gp:wan22-t2v', { width: 480, height: 480, video_frames: 17 }], ['wan2gp:hunyuan-video', { width: 640, height: 368, video_frames: 33, steps: 30 }],
+    ['wan2gp:flux-dev', { width: 1024, height: 1024, steps: 20 }], ['wan2gp:qwen-image', { width: 1024, height: 1024, steps: 20 }], ['z-image-base', { width: 512, height: 512, steps: 8 }]]) {
+    assert.doesNotThrow(() => prepare(getSpec(id), { prompt: 'x', init_image: '/i.png', ...ok }), `${id} ${JSON.stringify(ok)}`);
+  }
+});
+
+test('PARAM_INVALID: non-numeric / non-positive / fractional numeric fields are refused instead of being passed to sd-cli', () => {
+  const spec = getSpec('wan2gp:flux-dev');
+  for (const bad of [{ steps: 'abc' }, { steps: -1 }, { steps: 0 }, { steps: 2.5 }, { width: 'wide' }, { height: -512 }, { cfg_scale: 'x' }, { cfg_scale: -3 }, { seed: 'x' }, { width: NaN }]) {
+    assert.throws(() => prepare(spec, { prompt: 'x', ...bad }), (e) => e.code === 'PARAM_INVALID', JSON.stringify(bad));
+  }
+  assert.doesNotThrow(() => prepare(spec, { prompt: 'x', steps: '12', cfg_scale: '3.5', seed: '42' }), 'numeric strings from JSON forms are fine');
 });

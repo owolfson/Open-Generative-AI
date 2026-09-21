@@ -46,6 +46,40 @@ function ltxCheck(p) {
   if ((n - 1) % 8 !== 0) throw codeError('LTX_LIMIT', `LTX frame counts must be 8n+1 (33, 49, 97, 121...); got ${n}`);
 }
 
+// ---- measured-safe limits ----
+// A request must not be able to take the V100 down: an oversized job either runs out of memory AFTER evicting Hermes for minutes, or
+// (worse) runs past its lease window so the arbiter restores the brain on top of it. Every ceiling below is a size/length that was
+// actually measured on this hardware (see the catalog notes); anything beyond is refused up front with PARAM_LIMIT, before any lease.
+const IMG_1MP = { '1:1': [1024, 1024], '16:9': [1344, 768], '9:16': [768, 1344], '4:3': [1152, 896], '3:4': [896, 1152] };   // ~1 MP each, like the measured 1024x1024
+const LIMITS_IMAGE_1MP = { maxPixels: 1_110_000, maxSteps: 60, why: 'measured at 1024x1024 (~1 MP)' };
+const LIMITS_WAN = { maxPixels: 264_000, maxFrames: 33, maxSteps: 30, why: 'measured at 640x368 x 33 frames (832x480 ran out of memory in the VAE decode)' };
+const INT_FIELDS = ['width', 'height', 'steps', 'high_noise_steps', 'video_frames', 'fps'];
+const NUM_FIELDS = ['cfg_scale', 'high_noise_cfg_scale', 'guidance_scale'];
+
+function checkNumbers(given) {
+  for (const k of INT_FIELDS) {
+    if (given[k] === undefined) continue;
+    const v = Number(given[k]);
+    if (!Number.isInteger(v) || v <= 0) throw codeError('PARAM_INVALID', `${k} must be a positive whole number (got ${JSON.stringify(given[k])})`);
+  }
+  for (const k of NUM_FIELDS) {
+    if (given[k] === undefined) continue;
+    const v = Number(given[k]);
+    if (!Number.isFinite(v) || v < 0 || v > 30) throw codeError('PARAM_INVALID', `${k} must be a number between 0 and 30 (got ${JSON.stringify(given[k])})`);
+  }
+  if (given.seed !== undefined && !Number.isFinite(Number(given.seed))) throw codeError('PARAM_INVALID', `seed must be a number (got ${JSON.stringify(given.seed)})`);
+}
+
+function checkLimits(spec, p) {
+  const L = spec.limits;
+  if (!L) return;
+  if (L.maxPixels && p.width * p.height > L.maxPixels) throw codeError('PARAM_LIMIT', `${spec.id}: ${p.width}x${p.height} is larger than what was measured to work (${L.why}); at most ${L.maxPixels} pixels`);
+  if (L.maxFrames && p.video_frames > L.maxFrames) throw codeError('PARAM_LIMIT', `${spec.id}: ${p.video_frames} frames is more than what was measured to work (${L.why}); at most ${L.maxFrames}`);
+  for (const k of ['steps', 'high_noise_steps']) {
+    if (L.maxSteps && p[k] > L.maxSteps) throw codeError('PARAM_LIMIT', `${spec.id}: ${k}=${p[k]} is above the limit of ${L.maxSteps}`);
+  }
+}
+
 const SPECS = {
   'z-image-base': {
     // Upstream serves this with the Q4_K_M GGUF, which renders a SOLID WHITE image here (the job even reports "done"): reproduced on the GTX 1080 and the
@@ -54,7 +88,8 @@ const SPECS = {
     id: 'z-image-base', kind: 'image', ext: 'png', vramGb: 14,
     // ...and it renders a BLANK image on the V100 at every size and setting tried (512 and 1024, with and without flash attention) while the SAME file renders
     // correctly on the GTX 1080: fp16 tensor-core overflow on Volta. So it is restricted to the 1080, where it runs through host-RAM offload (slow: sizes are 768-based).
-    devices: ['gtx1080'], deviceNote: 'it renders a blank image on the Tesla V100 (fp16 overflow, measured at 512 and 1024) and only works on the GTX 1080', imageBase: 768,
+    devices: ['gtx1080'], deviceNote: 'it renders a blank image on the Tesla V100 (fp16 overflow, measured at 512 and 1024) and only works on the GTX 1080',
+    dims: { '1:1': [768, 768], '16:9': [1024, 576], '9:16': [576, 1024], '4:3': [832, 640], '3:4': [640, 832] }, limits: { maxPixels: 1_050_000, maxSteps: 60, why: 'a 1080 with host-RAM offload' },
     files: { diffusion: 'z-image-Q8_0.gguf', llm: 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf', vae: 'ae.safetensors' },
     defaults: () => ({ width: 768, height: 768, steps: 20, cfg_scale: 5 }),
     build: (p, f) => ['--diffusion-model', f.diffusion, '--llm', f.llm, '--vae', f.vae, '--sampling-method', 'euler', '--diffusion-fa', ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
@@ -62,6 +97,7 @@ const SPECS = {
   'wan2gp:flux-dev': {
     id: 'wan2gp:flux-dev', kind: 'image', ext: 'png', vramGb: 29,   // measured peak 28.8GB (1024x1024: 22.8GB while sampling, +6GB in the VAE decode)
     files: { diffusion: 'flux1-dev-Q8_0.gguf', vae: 'ae.sft.safetensors', clip_l: 'clip_l.safetensors', t5xxl: 't5xxl_fp16.safetensors' },
+    dims: IMG_1MP, limits: LIMITS_IMAGE_1MP,
     defaults: () => ({ width: 1024, height: 1024, steps: 20, cfg_scale: 1 }),
     // No --clip-on-cpu: this host has no F16C, so fp16 text encoding on the CPU is very slow. The V100 has room for T5 on the GPU.
     build: (p, f) => ['--diffusion-model', f.diffusion, '--vae', f.vae, '--clip_l', f.clip_l, '--t5xxl', f.t5xxl,
@@ -70,6 +106,7 @@ const SPECS = {
   'wan2gp:qwen-image': {
     id: 'wan2gp:qwen-image', kind: 'image', ext: 'png', vramGb: 25,   // measured peak 24.5GB with --vae-tiling
     files: { diffusion: 'qwen-image-2512-Q6_K.gguf', vae: 'qwen_image_vae.safetensors', llm: 'qwen_2.5_vl_7b_fp8_scaled.safetensors' },
+    dims: IMG_1MP, limits: LIMITS_IMAGE_1MP,
     defaults: () => ({ width: 1024, height: 1024, steps: 20, cfg_scale: 2.5, flow_shift: 3 }),
     build: (p, f) => ['--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm,
       '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', '--flow-shift', str(p.flow_shift), ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
@@ -80,7 +117,7 @@ const SPECS = {
       diffusion: 'Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
     },
-    defaults: WAN_DEFAULTS,
+    defaults: WAN_DEFAULTS, limits: LIMITS_WAN,
     validate: WAN_VALIDATE,
     build: (p, f) => [...wanArgs(p, f), '-i', p.init_image],
   },
@@ -90,7 +127,7 @@ const SPECS = {
       diffusion: 'Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
     },
-    defaults: WAN_DEFAULTS,
+    defaults: WAN_DEFAULTS, limits: LIMITS_WAN,
     validate: WAN_VALIDATE,
     build: (p, f) => wanArgs(p, f),
   },
@@ -99,6 +136,7 @@ const SPECS = {
     // glyph encoder (--t5xxl). 480p text-to-video, fp16. The text encoders' params live in host RAM (te=cpu), the diffusion model + VAE on the GPU.
     id: 'wan2gp:hunyuan-video', kind: 'video', ext: 'avi', vramGb: 28,   // provisional: measured on the V100, see the catalog note
     files: { diffusion: 'hunyuanvideo1.5_480p_t2v_fp16.safetensors', vae: 'hunyuanvideo15_vae_fp16.safetensors', llm: 'qwen_2.5_vl_7b_fp8_scaled.safetensors', t5xxl: 'byt5_small_glyphxl_fp16.safetensors' },
+    limits: { ...LIMITS_WAN, maxSteps: 60, why: 'measured at 640x368 x 33 frames, 30 steps' },
     defaults: () => ({ width: 640, height: 368, steps: 30, cfg_scale: 6, video_frames: 33, fps: 24 }),
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm, '--t5xxl', f.t5xxl,
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
@@ -120,7 +158,7 @@ const SPECS = {
     },
     dims: LTX_DIMS,
     defaults: () => ({ width: 640, height: 352, steps: 8, cfg_scale: 1, video_frames: 49, fps: 24 }),
-    check: ltxCheck,
+    check: ltxCheck, limits: { maxSteps: 30 },
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--audio-vae', f.audio_vae, '--llm', f.llm, '--embeddings-connectors', f.connectors,
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
       ...(p.init_image ? ['-i', p.init_image] : []), ...(p.negative_prompt ? ['-n', p.negative_prompt] : []),
@@ -167,7 +205,7 @@ const VIDEO_DIMS = { '1:1': [480, 480], '16:9': [640, 368], '9:16': [368, 640], 
 function dimsFor(spec, ar) {
   if (spec.dims) return spec.dims[ar] || null;
   if (spec.kind === 'video') return VIDEO_DIMS[ar] || null;
-  const base = spec.imageBase || 1024;
+  const base = 1024;
   const align = (v) => Math.round(v / 64) * 64;
   return {
     '1:1': [base, base], '16:9': [align((base * 16) / 9), base], '9:16': [base, align((base * 16) / 9)],
@@ -179,14 +217,17 @@ function dimsFor(spec, ar) {
 function prepare(spec, params) {
   if (spec.validate) spec.validate(params);   // refuse unsupported options before anything else (and before any lease)
   const given = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
+  checkNumbers(given);
   const p = { ...spec.defaults(given), ...given };
+  for (const k of [...INT_FIELDS, ...NUM_FIELDS]) if (given[k] !== undefined) p[k] = Number(given[k]);   // numeric strings from JSON forms become numbers
   const dims = given.aspect_ratio ? dimsFor(spec, given.aspect_ratio) : null;
   if (dims) { if (given.width === undefined) p.width = dims[0]; if (given.height === undefined) p.height = dims[1]; }
   if (given.guidance_scale !== undefined && given.cfg_scale === undefined) p.cfg_scale = Number(given.guidance_scale);   // upstream's name for it
   const seed = Number(p.seed);
   p.seed = Number.isInteger(seed) && seed > 0 ? seed : randomInt(1, 2147483647);
   if (spec.needsImage && !p.init_image) throw codeError('IMAGE_REQUIRED', 'this model needs an input image (image_job_id or image_base64)');
-  if (spec.check) spec.check(p);   // limits on the FINAL values (defaults + aspect ratio + overrides)
+  checkLimits(spec, p);            // measured-safe ceilings on the FINAL values (defaults + aspect ratio + overrides)
+  if (spec.check) spec.check(p);   // model-specific rules (LTX)
   return p;
 }
 

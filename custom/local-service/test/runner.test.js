@@ -374,3 +374,29 @@ test('Z-Image Base refuses the V100 up front with the reason (blank white image,
   await assert.rejects(() => r.run(job({ params: { model: 'z-image-base', prompt: 'a cat', device: 'v100' } }), ctx()), (e) => e.code === 'DEVICE_NOT_SUPPORTED' && /blank/.test(e.message));
   assert.equal(gate.calls.length, 0); assert.equal(sd.calls.length, 0);
 });
+
+// ---------- a job may not run past its time limit (a job outliving its lease would let the arbiter restore the brain on top of it) ----------
+test('JOB_TIMEOUT: a job that runs past the limit is aborted (sd-cli killed via the signal), reported as JOB_TIMEOUT, and its lease is released', async () => {
+  const { standin, gate } = fakes();
+  let aborted = false;
+  const hang = (opts) => new Promise((_, reject) => { opts.signal.addEventListener('abort', () => { aborted = true; reject(Object.assign(new Error('sd-cli was cancelled'), { code: 'CANCELLED' })); }, { once: true }); });
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], jobTimeoutMs: 80 });
+  const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: hang, log: quiet });
+  const started = Date.now();
+  await assert.rejects(() => r.run(job({ params: fluxJob() }), ctx()), (e) => e.code === 'JOB_TIMEOUT' && /limit/.test(e.message));
+  assert.ok(aborted, 'the child was told to stop'); assert.ok(Date.now() - started < 3000);
+  assert.equal(gate.calls.length, 1); assert.equal(gate.releases, 1, 'the lease is given back');
+});
+
+test('the timeout does not fire for a job that finishes in time, and a user cancel is still a plain cancel', async () => {
+  const { standin, gate } = fakes();
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], jobTimeoutMs: 5000 });
+  const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: fakeSdcli(), log: quiet });
+  const out = await r.run(job({ params: fluxJob() }), ctx()); assert.equal(out.kind, 'image');
+  const controller = new AbortController();
+  const hang = (opts) => new Promise((_, reject) => { opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { code: 'CANCELLED' })), { once: true }); });
+  const r2 = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: hang, log: quiet });
+  const p = r2.run(job({ id: 'job2', params: fluxJob() }), { signal: controller.signal });
+  setTimeout(() => controller.abort(), 30);
+  await assert.rejects(() => p, { code: 'CANCELLED' });
+});

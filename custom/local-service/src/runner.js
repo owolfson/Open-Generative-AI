@@ -37,6 +37,7 @@ function loadProgressParser(upstreamDir) {
   catch { return undefined; }
 }
 
+const DEFAULT_JOB_TIMEOUT_MS = 30 * 60 * 1000;
 const EST_IMAGE_SECONDS = 900;
 const EST_VIDEO_SECONDS = 1800;
 // A V100 lease is a WHOLE-CARD lease (any grant evicts the Hermes brain and the TTS), so the VRAM it declares is just accounting:
@@ -197,6 +198,25 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     return { ...result, file: mp4File, url: `/outputs/${mp4File}`, mime: MIME.mp4, bytes, source: result.file };
   }
 
+  /** Run fn with a signal that also fires after the job time limit. A job that outlives its lease would let the arbiter restore the brain on top of it. */
+  async function withTimeLimit(ctx, fn) {
+    const limitMs = config.jobTimeoutMs || DEFAULT_JOB_TIMEOUT_MS;
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (ctx.signal.aborted) controller.abort(); else ctx.signal.addEventListener('abort', onAbort, { once: true });
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, limitMs);
+    try {
+      return await fn({ ...ctx, signal: controller.signal });
+    } catch (err) {
+      if (timedOut && !ctx.signal.aborted) throw codeError('JOB_TIMEOUT', `the job exceeded its ${Math.round(limitMs / 60000)} minute limit and was stopped`);
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      ctx.signal.removeEventListener('abort', onAbort);
+    }
+  }
+
   async function run(job, ctx) {
     if (held) clearTimeout(held.idleTimer);
     const pending = () => (ctx.pending ? ctx.pending() : []);
@@ -205,7 +225,7 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
       const d = describe(job);
       if (d.onGtx1080) await dropLease();                       // a held lease is never needed for the 1080; do not sit on the V100
       else await ensureLease(job, d.need, pending());
-      const result = await (d.spec ? runExtended(job, ctx, d) : runUpstream(job, ctx, d));
+      const result = await withTimeLimit(ctx, (limited) => (d.spec ? runExtended(job, limited, d) : runUpstream(job, limited, d)));
       succeeded = true;
       return result;
     } finally {

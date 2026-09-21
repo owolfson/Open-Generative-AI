@@ -5,6 +5,8 @@ const { randomUUID } = require('node:crypto');
 const catalog = require('./catalog');
 const { getSpec, resolveFiles } = require('./sdcpp-models');
 
+const MAX_PROMPT_CHARS = 8000;   // an argv entry over ~128KB makes exec fail, and no model uses more than a few hundred tokens
+
 function failure(code, message, status) { return Object.assign(new Error(message), { code, status }); }
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -28,6 +30,10 @@ function createService({ standin, queue, config }) {
     const meta = catalog.assess(params && params.model);
     if (!meta) throw failure('UNKNOWN_MODEL', `unknown or excluded model: ${params && params.model}`, 400);
     if (typeof params.prompt !== 'string' || !params.prompt) throw failure('BAD_REQUEST', 'prompt is required', 400);
+    if (params.prompt.length > MAX_PROMPT_CHARS) throw failure('BAD_REQUEST', `prompt is longer than ${MAX_PROMPT_CHARS} characters`, 400);
+    if (typeof params.negative_prompt === 'string' && params.negative_prompt.length > MAX_PROMPT_CHARS) throw failure('BAD_REQUEST', `negative_prompt is longer than ${MAX_PROMPT_CHARS} characters`, 400);
+    const maxPending = (config && config.maxPending) || 25;
+    if (queue.pending.length >= maxPending) throw failure('QUEUE_FULL', `${queue.pending.length} jobs are already waiting (limit ${maxPending}); try again when some have finished`, 429);
     return queue.submit({ kind: meta.kind, route: meta.route, params: resolveInputImage(getSpec(params.model), params) });
   }
 

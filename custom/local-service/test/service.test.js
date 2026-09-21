@@ -139,3 +139,23 @@ test('sd-cli progress events from the stand-in land on the running job (this is 
   assert.equal(q.get(job.id).progress.step, 3);
   gate.resolve(); await q.wait(job.id, 1000);
 });
+
+test('prompts and negative prompts are length-capped at submission (an argument over ~128KB makes exec fail; huge prompts are never useful)', () => {
+  const svc = createService({ standin, queue: new JobQueue({ run: async () => ({}) }) });
+  assert.throws(() => svc.submitGeneration({ model: 'z-image-turbo', prompt: 'x'.repeat(8001) }), { code: 'BAD_REQUEST', status: 400 });
+  assert.throws(() => svc.submitGeneration({ model: 'z-image-turbo', prompt: 'ok', negative_prompt: 'x'.repeat(8001) }), { code: 'BAD_REQUEST', status: 400 });
+  assert.doesNotThrow(() => svc.submitGeneration({ model: 'z-image-turbo', prompt: 'x'.repeat(8000) }));
+});
+
+test('the queue is bounded: at most maxPending waiting jobs, then 429 QUEUE_FULL (a flood cannot pile up V100 jobs)', async () => {
+  const gate = (() => { let r; const promise = new Promise((res) => { r = res; }); return { promise, resolve: r }; })();
+  const q = new JobQueue({ run: async () => { await gate.promise; return {}; } });
+  const svc = createService({ standin, queue: q, config: { maxPending: 3 } });
+  const first = svc.submitGeneration({ model: 'z-image-turbo', prompt: 'a' });          // becomes the running job
+  await new Promise((r) => setImmediate(r));
+  for (let i = 0; i < 3; i += 1) svc.submitGeneration({ model: 'z-image-turbo', prompt: `w${i}` });   // 3 waiting = the cap
+  assert.throws(() => svc.submitGeneration({ model: 'z-image-turbo', prompt: 'too many' }), { code: 'QUEUE_FULL', status: 429 });
+  q.cancel(q.pending[0]);   // a slot frees up
+  assert.doesNotThrow(() => svc.submitGeneration({ model: 'z-image-turbo', prompt: 'fits again' }));
+  gate.resolve(); await q.wait(first.id, 1000);
+});
