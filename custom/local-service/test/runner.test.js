@@ -8,7 +8,7 @@ const { createRunner } = require('../src/runner');
 
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('PNG!').toString('base64')}`;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-runner-'));
-const config = (over = {}) => ({ leaseLingerMs: 0, gpuEnabled: true, allowedDevices: ['v100', 'gtx1080'], arbiterUrl: 'http://arb', outputsDir: tmp(), sdcppConsumer: 'ogai-local', sdcppVramGb: 10, deviceIndexV100: 0, deviceIndex1080: 1, dataDir: tmp(), tmpDir: tmp(), sdcliPath: '/opt/sd-cli', modelDirs: [], ...over });
+const config = (over = {}) => ({ leaseLingerMs: 0, leaseHandoverMs: 0, gpuEnabled: true, allowedDevices: ['v100', 'gtx1080'], arbiterUrl: 'http://arb', outputsDir: tmp(), sdcppConsumer: 'ogai-local', sdcppVramGb: 10, deviceIndexV100: 0, deviceIndex1080: 1, dataDir: tmp(), tmpDir: tmp(), sdcliPath: '/opt/sd-cli', modelDirs: [], ...over });
 const job = (over = {}) => ({ id: 'job1', route: 'sdcpp', params: { model: 'z-image-turbo', prompt: 'a cat' }, ...over });
 const ctx = () => ({ signal: new AbortController().signal });
 const quiet = { warn() {}, error() {} };
@@ -434,4 +434,42 @@ test('a GTX 1080 job (or shutdown) during the linger window gives the V100 back 
   assert.equal(gate.releases, 1);
   await r.shutdown();
   assert.equal(gate.releases, 2, 'shutdown cancels the linger timer and releases');
+});
+
+// ---------- lease renewal: a job that does not fit the remaining lease window is HANDED the V100, never given back first ----------
+function eventGate() {
+  // models the arbiter: one lease at a time; an acquire made while another lease is held waits, and is granted the moment that one is released
+  const events = []; let holder = null; const waiters = [];
+  const gate = {
+    events,
+    acquire: async (cfg, opts) => {
+      events.push(`acquire#${events.filter((e) => e.startsWith('acquire')).length + 1}(${opts.estSeconds})`);
+      if (holder) await new Promise((res) => waiters.push(res));
+      const id = `lease-${events.length}`; holder = id;
+      return { leaseId: id, release: async () => { events.push(`release(${id})`); holder = null; const w = waiters.shift(); if (w) w(); } };
+    },
+  };
+  return gate;
+}
+
+test('renewal: when the next job no longer fits the remaining window, the NEW lease is requested BEFORE the old one is released (no brain restore in between)', async () => {
+  const { standin } = fakes(); const g = eventGate();
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], leaseMinSeconds: 0, leaseLingerMs: 10_000 });   // window = the one job's estimate (900s), so job 2 (900s) cannot fit what is left of it
+  const r = createRunner({ config: cfg, standin, acquireImpl: g.acquire, sdcli: fakeSdcli(), log: quiet });
+  await r.run(job({ id: 'j1', params: fluxJob() }), ctx());
+  await r.run(job({ id: 'j2', params: fluxJob() }), ctx());
+  assert.deepEqual(g.events.map((e) => e.replace(/\(lease-\d+\)|\(\d+\)/, '')), ['acquire#1', 'acquire#2', 'release'], 'acquire #2 goes out before the old lease is released');
+  await r.shutdown();
+  assert.equal(g.events.filter((e) => e.startsWith('release')).length, 2, 'both leases end up released');
+});
+
+test('renewal still ends cleanly when the arbiter refuses the new lease: the job fails with the arbiter error and nothing is left held', async () => {
+  const { standin } = fakes(); let n = 0; const released = [];
+  const acquire = async () => { n += 1; if (n === 2) throw Object.assign(new Error('V100 not clear'), { code: 'ARBITER_REFUSED' }); return { leaseId: `l${n}`, release: async () => { released.push(`l${n}`); } }; };
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], leaseMinSeconds: 0, leaseLingerMs: 10_000 });
+  const r = createRunner({ config: cfg, standin, acquireImpl: acquire, sdcli: fakeSdcli(), log: quiet });
+  await r.run(job({ id: 'j1', params: fluxJob() }), ctx());
+  await assert.rejects(() => r.run(job({ id: 'j2', params: fluxJob() }), ctx()), { code: 'ARBITER_REFUSED' });
+  await r.shutdown();
+  assert.equal(released.length, 1, 'the old lease was released exactly once and nothing else is held');
 });

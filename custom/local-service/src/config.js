@@ -12,6 +12,7 @@ function loadConfig(env = process.env) {
     ffmpegPath: env.OGAI_FFMPEG || '/usr/local/bin/ffmpeg',                // turns sd.cpp's MJPEG .avi into a browser-playable .mp4
     // read-only mounts (OGAI_MODEL_DIRS) first, then the service's own model folder (upstream's downloads + fetch-models.py's extended/ subfolder); searched by basename
     modelDirs: [...(env.OGAI_MODEL_DIRS || '').split(':').filter(Boolean), path.join(dataDir, 'local-ai', 'models')],
+    leaseMinSeconds: Number(env.OGAI_LEASE_MIN_S === undefined ? 3600 : env.OGAI_LEASE_MIN_S),            // shortest lease window requested from the arbiter (its hard expiry is 2x this)
     leaseLingerMs: Number(env.OGAI_LEASE_LINGER_S === undefined ? 30 : env.OGAI_LEASE_LINGER_S) * 1000,   // hold the V100 lease this long after the queue empties (0 = release at once)
     maxPending: Number(env.OGAI_MAX_QUEUE || 25),                          // waiting jobs allowed before 429 QUEUE_FULL
     jobTimeoutMs: Number(env.OGAI_JOB_TIMEOUT_S || 1800) * 1000,           // a job running longer than this is stopped (JOB_TIMEOUT)

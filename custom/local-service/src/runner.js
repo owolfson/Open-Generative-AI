@@ -44,7 +44,8 @@ const EST_VIDEO_SECONDS = 1800;
 // always claim the biggest model's footprint, so a bigger job that arrives after a smaller one started can still share the lease.
 // The window is never shorter than an hour for the same reason (the arbiter force-releases at 2x est_seconds; jobs are not
 // started on a lease that would not outlast them, see covers()).
-const LEASE_MIN_SECONDS = 3600;
+const DEFAULT_LEASE_MIN_SECONDS = 3600;
+const DEFAULT_HANDOVER_MS = 500;   // let the queued acquire reach the arbiter before the old lease is released
 const LEASE_MAX_VRAM_GB = 28;   // the arbiter's SAFE_VRAM_BUDGET: a spec's real peak may exceed it (Flux 28.8GB), the lease claim may not
 
 /**
@@ -61,6 +62,8 @@ const LEASE_MAX_VRAM_GB = 28;   // the arbiter's SAFE_VRAM_BUDGET: a spec's real
  */
 function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, mp4Impl = toMp4, log = console, idleReleaseMs = 10_000 }) {
   const lingerMs = config.leaseLingerMs === undefined ? 30_000 : config.leaseLingerMs;
+  const leaseMinSeconds = config.leaseMinSeconds === undefined ? DEFAULT_LEASE_MIN_SECONDS : config.leaseMinSeconds;
+  const handoverMs = config.leaseHandoverMs === undefined ? DEFAULT_HANDOVER_MS : config.leaseHandoverMs;
   const parseChunk = loadProgressParser(config.upstreamDir || '');
   const emitProgress = (data) => { if (standin.events && standin.events.emit) standin.events.emit('send', 'local-ai:progress', data); };
 
@@ -110,8 +113,11 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
 
   /** Make sure this V100 job runs under a lease: reuse the held one if it still covers the job, else take one sized for the batch. */
   async function ensureLease(job, need, pending) {
-    if (held && !covers(need)) await dropLease();
-    if (held) { clearTimeout(held.idleTimer); return; }
+    if (held && covers(need)) { clearTimeout(held.idleTimer); return; }
+    // Only TIME ran short (the lease claims the whole card): hand the V100 over instead of giving it back. The arbiter restores the brain the
+    // instant a lease is released, so the replacement is requested FIRST (it queues behind the old lease) and the old one is released after;
+    // the arbiter then grants the queued request directly, with no restore/evict cycle in between.
+    const renew = Boolean(held) && Math.min(need.vramGb, LEASE_MAX_VRAM_GB) <= held.vramGb;
     const batch = [need];
     let seconds = need.estSeconds;
     for (const next of pending) {
@@ -121,10 +127,21 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     }
     const vramGb = Math.min(LEASE_MAX_VRAM_GB, Math.max(config.sdcppVramGb, ...Object.values(SPECS).map((spec) => spec.vramGb), ...batch.map((n) => n.vramGb)));
     const queued = batch.length - 1;
-    seconds = Math.min(Math.max(seconds, LEASE_MIN_SECONDS), MAX_EST_SECONDS);
-    const lease = await acquireImpl(config, {
-      consumer: config.sdcppConsumer, vramGb, estSeconds: seconds, note: `ogai-local job ${job.id}${queued ? ` (+${queued} queued)` : ''}`,
-    }, { log });
+    seconds = Math.min(Math.max(seconds, leaseMinSeconds), MAX_EST_SECONDS);
+    const request = { consumer: config.sdcppConsumer, vramGb, estSeconds: seconds, note: `ogai-local job ${job.id}${queued ? ` (+${queued} queued)` : ''}${renew ? ' (renewal)' : ''}` };
+    let lease;
+    if (renew) {
+      const old = held;
+      held = null; clearTimeout(old.idleTimer);
+      const replacement = acquireImpl(config, request, { log });
+      replacement.catch(() => {});   // its outcome is awaited below; avoid an unhandled rejection while we wait
+      if (handoverMs > 0) await new Promise((res) => setTimeout(res, handoverMs));
+      await old.lease.release();
+      lease = await replacement;
+    } else {
+      if (held) await dropLease();
+      lease = await acquireImpl(config, request, { log });
+    }
     held = { lease, vramGb, deadline: Date.now() + seconds * 1000, idleTimer: null };
   }
 
