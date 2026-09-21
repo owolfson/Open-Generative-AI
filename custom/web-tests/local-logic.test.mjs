@@ -99,3 +99,12 @@ test('buildParams: only image-to-video models send a starting image; text-to-vid
 test('kindLabel names what a video model takes', () => {
   assert.equal(kindLabel(wan), 'image → video'); assert.equal(kindLabel(t2v), 'text → video'); assert.equal(kindLabel(flux), '');
 });
+
+const ltx = { id: 'wan2gp:ltx-video', name: 'LTX-2.3', kind: 'video', route: 'sdcpp', star: false, weightsGb: 26, filesPresent: true, needsImage: false, acceptsImage: true };
+
+test('LTX takes an OPTIONAL image: sent when given, omitted when not; labelled text / image -> video', () => {
+  assert.equal(kindLabel(ltx), 'text / image → video');
+  assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100', imageBase64: 'AAAA' }).image_base64, 'AAAA');
+  assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100' }).image_base64, undefined);
+  assert.equal(buildParams({ model: t2v, prompt: 'x', aspect: '16:9', device: 'v100', imageBase64: 'AAAA' }).image_base64, undefined, 'text-only models still never send one');
+});

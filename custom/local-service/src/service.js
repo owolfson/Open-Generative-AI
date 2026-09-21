@@ -36,7 +36,7 @@ function createService({ standin, queue, config }) {
   // from the request and only set here, to a file we wrote or an output we produced.
   function resolveInputImage(spec, params) {
     const { init_image: ignored, image_job_id: jobId, image_base64: b64, ...rest } = params;   // eslint-disable-line no-unused-vars
-    if (!spec || !spec.needsImage) {
+    if (!spec || !(spec.needsImage || spec.acceptsImage)) {
       if (jobId || b64) throw failure('BAD_REQUEST', 'this model does not take an input image', 400);
       return rest;
     }
@@ -56,6 +56,7 @@ function createService({ standin, queue, config }) {
       fs.writeFileSync(dest, buf);
       return { ...rest, init_image: dest };
     }
+    if (spec.acceptsImage) return rest;   // optional: text-to-video
     throw failure('IMAGE_REQUIRED', 'this model needs an input image: pass image_job_id (an earlier image job) or image_base64', 400);
   }
 
@@ -77,7 +78,7 @@ function createService({ standin, queue, config }) {
       const spec = getSpec(m.id);
       if (!spec) return m;
       const info = { ...m, vramGb: spec.vramGb };
-      if (spec.kind === 'video') info.needsImage = Boolean(spec.needsImage);   // the GUI shows the image picker only for image-to-video
+      if (spec.kind === 'video') { info.needsImage = Boolean(spec.needsImage); info.acceptsImage = Boolean(spec.acceptsImage); }   // the GUI shows the image picker only for image-to-video
       if (config && config.modelDirs) info.filesPresent = resolveFiles(spec, config.modelDirs, {}).missing.length === 0;
       return info;
     };

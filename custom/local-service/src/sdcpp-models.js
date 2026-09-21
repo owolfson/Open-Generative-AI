@@ -31,6 +31,21 @@ const wanArgs = (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '-
   '--params-backend', 'te=cpu', '--vae-tiling'];
 
 
+// ---- LTX-2.3 hard limits ----
+// From this host's crash history (memory: feedback_ltx_720p_NEVER_v100, feedback_ltx_22b_duration_limit): LTX at 720p and clips over 5s took the
+// whole machine down (7+ host crashes, all through LTX Desktop). This service runs LTX differently, but the limits stay as CODE, not advice:
+// 540p-class (<= 960x576 = 552,960 px) and <= 121 frames (5s at 24fps). Sizes must be multiples of 32 and frames 8n+1 (the VAE's strides).
+const LTX_MAX_PIXELS = 960 * 576;
+const LTX_MAX_FRAMES = 121;
+const LTX_DIMS = { '16:9': [960, 544], '9:16': [544, 960], '1:1': [640, 640], '4:3': [768, 576], '3:4': [576, 768] };
+function ltxCheck(p) {
+  const w = Number(p.width); const h = Number(p.height); const n = Number(p.video_frames);
+  if (w * h > LTX_MAX_PIXELS) throw codeError('LTX_LIMIT', `LTX is limited to 540p-class sizes (at most 960x576 = ${LTX_MAX_PIXELS} px): ${w}x${h} is refused (720p crashed this host)`);
+  if (n > LTX_MAX_FRAMES) throw codeError('LTX_LIMIT', `LTX is limited to 121 frames (5s at 24fps): ${n} frames refused`);
+  if (w % 32 !== 0 || h % 32 !== 0) throw codeError('LTX_LIMIT', `LTX sizes must be a multiple of 32 (got ${w}x${h}); e.g. 960x544, 640x352`);
+  if ((n - 1) % 8 !== 0) throw codeError('LTX_LIMIT', `LTX frame counts must be 8n+1 (33, 49, 97, 121...); got ${n}`);
+}
+
 const SPECS = {
   'wan2gp:flux-dev': {
     id: 'wan2gp:flux-dev', kind: 'image', ext: 'png', vramGb: 29,   // measured peak 28.8GB (1024x1024: 22.8GB while sampling, +6GB in the VAE decode)
@@ -77,6 +92,24 @@ const SPECS = {
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
       ...(p.negative_prompt ? ['-n', p.negative_prompt] : []), '--params-backend', 'te=cpu', '--vae-tiling'],
   },
+  'wan2gp:ltx-video': {
+    // LTX-2.3 22B distilled as a Q4_K_M GGUF (unsloth), run by sd.cpp exactly as its docs/ltx2.md shows (distilled = 8 steps, cfg 1).
+    // Why NOT LTX Desktop: its bf16/int8 pipeline block-cycles 43GB of weights through host RAM and crashed this host repeatedly (and the
+    // container is gone). Here the whole 14GB model sits in VRAM and only Gemma's params (7.4GB) live in host RAM (te=cpu, same
+    // placement that made Wan/Hunyuan work), so there is no RAM<->VRAM cycling and no 43GB read.
+    id: 'wan2gp:ltx-video', kind: 'video', ext: 'avi', vramGb: 28, acceptsImage: true,   // image optional: text-to-video, or image-to-video when one is given
+    files: {
+      diffusion: 'ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf', vae: 'ltx-2.3-22b-distilled_video_vae.safetensors', audio_vae: 'ltx-2.3-22b-distilled_audio_vae.safetensors',
+      connectors: 'ltx-2.3-22b-distilled_embeddings_connectors.safetensors', llm: 'gemma-3-12b-it-qat-UD-Q4_K_XL.gguf',
+    },
+    dims: LTX_DIMS,
+    defaults: () => ({ width: 640, height: 352, steps: 8, cfg_scale: 1, video_frames: 49, fps: 24 }),
+    check: ltxCheck,
+    build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--audio-vae', f.audio_vae, '--llm', f.llm, '--embeddings-connectors', f.connectors,
+      '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
+      ...(p.init_image ? ['-i', p.init_image] : []), ...(p.negative_prompt ? ['-n', p.negative_prompt] : []),
+      '--params-backend', 'te=cpu', '--vae-tiling'],
+  },
 };
 
 const getSpec = (id) => SPECS[id];
@@ -115,8 +148,9 @@ function resolveFiles(spec, dirs, params = {}) {
 const VIDEO_DIMS = { '1:1': [480, 480], '16:9': [640, 368], '9:16': [368, 640], '4:3': [576, 432], '3:4': [432, 576] };
 
 // aspect_ratio -> 64-aligned dimensions (same idea as upstream's arToDimensions): base 1024 for images.
-function dimsFor(kind, ar) {
-  if (kind === 'video') return VIDEO_DIMS[ar] || null;
+function dimsFor(spec, ar) {
+  if (spec.dims) return spec.dims[ar] || null;
+  if (spec.kind === 'video') return VIDEO_DIMS[ar] || null;
   const base = 1024;
   const align = (v) => Math.round(v / 64) * 64;
   return {
@@ -130,12 +164,13 @@ function prepare(spec, params) {
   if (spec.validate) spec.validate(params);   // refuse unsupported options before anything else (and before any lease)
   const given = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
   const p = { ...spec.defaults(given), ...given };
-  const dims = given.aspect_ratio ? dimsFor(spec.kind, given.aspect_ratio) : null;
+  const dims = given.aspect_ratio ? dimsFor(spec, given.aspect_ratio) : null;
   if (dims) { if (given.width === undefined) p.width = dims[0]; if (given.height === undefined) p.height = dims[1]; }
   if (given.guidance_scale !== undefined && given.cfg_scale === undefined) p.cfg_scale = Number(given.guidance_scale);   // upstream's name for it
   const seed = Number(p.seed);
   p.seed = Number.isInteger(seed) && seed > 0 ? seed : randomInt(1, 2147483647);
   if (spec.needsImage && !p.init_image) throw codeError('IMAGE_REQUIRED', 'this model needs an input image (image_job_id or image_base64)');
+  if (spec.check) spec.check(p);   // limits on the FINAL values (defaults + aspect ratio + overrides)
   return p;
 }
 

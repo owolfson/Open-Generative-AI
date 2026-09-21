@@ -18,11 +18,11 @@ const ENTRIES = [
   { id: 'wan2gp:wan22-t2v', name: 'Wan 2.2 (Text-to-Video)', kind: 'video', route: SD, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 19.3, note: 'Served by sd.cpp: the Q4_K_M high/low-noise pair (QuantStack GGUF) with the same Wan VAE and UMT5 encoder as image-to-video, same recipe (quality mode, 640x368, 33 frames). Not yet measured.' },
   { id: 'wan2gp:wan22-i2v', name: 'Wan 2.2 (Image-to-Video)', kind: 'video', route: SD, v100: 'recommended', star: true, evidence: 'proven', provenOn: ['v100'], weightsGb: 26.8, note: 'Served by sd.cpp: the Q4_K_M high/low-noise pair from the ComfyUI store, quality mode only (10+8 steps): the lightx2v 4-step LoRAs abort sd.cpp on these GGUFs. Proven on the V100 at 640x368 / 33 frames (377s incl. load, peak 27.4GB) with the T5 encoder params in host RAM (--params-backend te=cpu); output is converted to mp4 for browsers. --offload-to-cpu is NOT used: it needs ~24GB of host shmem and got OOM-killed.' },
   { id: 'wan2gp:hunyuan-video', name: 'HunyuanVideo 1.5 (Text-to-Video)', kind: 'video', route: SD, v100: 'supported', star: false, evidence: 'untested', provenOn: [], weightsGb: 20.0, note: 'Served by sd.cpp: HunyuanVideo 1.5 480p fp16 (8.3B) + its VAE + Qwen2.5-VL + ByT5, per sd.cpp docs. Not yet measured.' },
-  { id: 'wan2gp:ltx-video', name: 'LTX Video (0.9.8 13B distilled)', kind: 'video', route: WAN, v100: 'supported', star: false, evidence: 'untested', provenOn: [], weightsGb: 13.2, note: 'Not offered: sd.cpp only supports LTX-2.3 / LTX-2.5 (22B), not this 0.9.8 build, and LTX-2.3 22B is excluded on this box.' },
+  { id: 'wan2gp:ltx-video', name: 'LTX-2.3 22B (Text/Image-to-Video, distilled)', kind: 'video', route: SD, v100: 'supported', star: false, evidence: 'untested', provenOn: [], weightsGb: 26.0, note: 'Served by sd.cpp as a Q4_K_M GGUF (8 steps, cfg 1) with Gemma-3-12B as the text encoder; the model sits in VRAM and only the encoder params use host RAM, so none of the LTX Desktop RAM block-cycling that crashed this host. HARD LIMITS in code: 540p-class (<=960x576), <=121 frames (5s at 24fps). Video only (no audio track). Not yet measured.' },
 ];
 
 const EXCLUDED = [
-  { id: 'ltx-2.3-22b', reason: 'LTX-2.3 22B (19.4GB int8) caused 4 host crashes on this box; never run it.' },
+  { id: 'ltx-2.3-22b', reason: 'LTX Desktop (the bf16/int8 22B pipeline that block-cycles ~43GB of weights through host RAM, and 720p) crashed this host 7+ times and its container is gone. LTX-2.3 is offered instead as a Q4 GGUF through sd.cpp, capped at 540p / 5s.' },
   { id: 'nvfp4-and-nunchaku-variants', reason: 'Volta (compute 7.0) has no FP4/FP8/Nunchaku kernels.' },
 ];
 

@@ -216,7 +216,8 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     return models.find((m) => m.readiness.ready && !needsV100(m)) || models.find((m) => m.readiness.ready) || models[0] || null;
   }, [models, modelId]);
 
-  const needsImage = kind === "video" && Boolean(model && model.needsImage);   // only image-to-video models take a starting image
+  const needsImage = kind === "video" && Boolean(model && model.needsImage);   // image-to-video models REQUIRE a starting image
+  const takesImage = needsImage || (kind === "video" && Boolean(model && model.acceptsImage));   // ...and some (LTX) accept one optionally
   const aspects = model ? aspectsFor(model) : ["1:1"];
   useEffect(() => { if (model && !aspects.includes(aspect)) setAspect(aspects[0]); }, [model, aspects, aspect]);
 
@@ -342,7 +343,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     setError(null);
     let imageBase64;
     try {
-      if (needsImage) imageBase64 = source.file ? await blobToBase64(source.file) : await urlToBase64(source.url);
+      if (takesImage && source) imageBase64 = source.file ? await blobToBase64(source.file) : await urlToBase64(source.url);
       const params = buildParams({ model, prompt, negative, aspect, device: device.device, advanced, imageBase64 });
       onGenerationStart?.();
       const started = await submitJob(params);
@@ -412,7 +413,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
         <div className="flex flex-col gap-3">
           {v100Run && <p className="text-[11px] text-amber-300/90 px-1" data-testid="v100-note">⚠ {V100_WARNING}</p>}
           <div className="flex items-center gap-2.5 flex-wrap">
-            {needsImage && (
+            {takesImage && (
               <div className="relative" onClick={stop}>
                 {source ? (
                   <div className={PROMPT_MEDIA_PREVIEW_CLASS}>
@@ -420,7 +421,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                     <button type="button" onClick={() => setSource(null)} aria-label="Remove source image" className="absolute top-0.5 right-0.5 w-4 h-4 bg-black/60 hover:bg-black rounded-full flex items-center justify-center text-white/85 text-[8px] border border-white/5">×</button>
                   </div>
                 ) : (
-                  <button type="button" onClick={toggle("source")} title="Starting image" aria-label="Choose a starting image" data-testid="source-button" className={promptMediaButtonClassName({ active: open === "source" })}>
+                  <button type="button" onClick={toggle("source")} title={needsImage ? "Starting image (required)" : "Starting image (optional)"} aria-label="Choose a starting image" data-testid="source-button" className={promptMediaButtonClassName({ active: open === "source" })}>
                     <span className="text-white/60 text-lg leading-none">+</span>
                   </button>
                 )}
@@ -454,7 +455,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleGenerate(); }}
-              placeholder={needsImage ? "Describe how the image should move" : kind === "video" ? "Describe the video you want to create" : "Describe the image you want to create"}
+              placeholder={needsImage ? "Describe how the image should move" : kind === "video" ? (takesImage ? "Describe the video (add a starting image if you like)" : "Describe the video you want to create") : "Describe the image you want to create"}
               className="flex-1 min-w-[200px]"
               disabled={busy}
               data-testid="local-prompt"

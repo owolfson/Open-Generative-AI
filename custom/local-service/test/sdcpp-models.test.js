@@ -179,3 +179,38 @@ test('HunyuanVideo 1.5: sd.cpp doc recipe (diffusion + vae + Qwen2.5-VL as --llm
   assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--params-backend', 'te=cpu'));
   assert.equal(args.includes('--high-noise-diffusion-model'), false); assert.equal(args.includes('-i'), false);
 });
+
+// ---------- LTX-2.3 22B distilled (Q4_K_M GGUF) through sd.cpp ----------
+const LTX_FILES = { diffusion: '/m/ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf', vae: '/m/ltx-2.3-22b-distilled_video_vae.safetensors', audio_vae: '/m/ltx-2.3-22b-distilled_audio_vae.safetensors', connectors: '/m/ltx-2.3-22b-distilled_embeddings_connectors.safetensors', llm: '/m/gemma-3-12b-it-qat-UD-Q4_K_XL.gguf' };
+
+test('LTX-2.3 distilled: sd.cpp recipe (8 steps, cfg 1, euler, fa), text encoder params in RAM, vae tiling, image optional', () => {
+  const spec = getSpec('wan2gp:ltx-video');
+  assert.equal(spec.kind, 'video'); assert.equal(spec.ext, 'avi'); assert.ok(!spec.needsImage); assert.equal(spec.acceptsImage, true);
+  assert.deepEqual(Object.values(spec.files).sort(), ['gemma-3-12b-it-qat-UD-Q4_K_XL.gguf', 'ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf', 'ltx-2.3-22b-distilled_audio_vae.safetensors', 'ltx-2.3-22b-distilled_embeddings_connectors.safetensors', 'ltx-2.3-22b-distilled_video_vae.safetensors']);
+  const t2v = buildArgs(spec, prepare(spec, { prompt: 'a lovely cat', seed: 3 }), LTX_FILES, '/o.avi');
+  assert.ok(pair(t2v, '-M', 'vid_gen')); assert.ok(pair(t2v, '--diffusion-model', LTX_FILES.diffusion)); assert.ok(pair(t2v, '--vae', LTX_FILES.vae)); assert.ok(pair(t2v, '--audio-vae', LTX_FILES.audio_vae));
+  assert.ok(pair(t2v, '--llm', LTX_FILES.llm)); assert.ok(pair(t2v, '--embeddings-connectors', LTX_FILES.connectors));
+  assert.ok(pair(t2v, '--steps', 8)); assert.ok(pair(t2v, '--cfg-scale', 1)); assert.ok(pair(t2v, '--sampling-method', 'euler')); assert.ok(t2v.includes('--diffusion-fa'));
+  assert.ok(pair(t2v, '--fps', 24)); assert.ok(pair(t2v, '--params-backend', 'te=cpu')); assert.ok(t2v.includes('--vae-tiling')); assert.equal(t2v.includes('--offload-to-cpu'), false);
+  assert.equal(t2v.includes('-i'), false, 'text-to-video without an image');
+  const i2v = buildArgs(spec, prepare(spec, { prompt: 'a lovely cat', init_image: '/tmp/in.png' }), LTX_FILES, '/o.avi');
+  assert.ok(pair(i2v, '-i', '/tmp/in.png'), 'the same model animates an image when one is given');
+});
+
+test('LTX-2.3 sizes: 540p-class only (32-aligned), 16:9 -> 960x544, 9:16 -> 544x960', () => {
+  const spec = getSpec('wan2gp:ltx-video');
+  const dims = (ar) => { const p = prepare(spec, { prompt: 'x', aspect_ratio: ar }); return [p.width, p.height]; };
+  assert.deepEqual(dims('16:9'), [960, 544]); assert.deepEqual(dims('9:16'), [544, 960]);
+  for (const ar of ['1:1', '4:3', '3:4']) { const [w, h] = dims(ar); assert.ok(w % 32 === 0 && h % 32 === 0 && w * h <= 960 * 576, ar); }
+});
+
+test('LTX-2.3 HARD LIMITS from the host-crash history (720p and >5s crashed this box): refused before any lease', () => {
+  const spec = getSpec('wan2gp:ltx-video');
+  for (const bad of [{ width: 1280, height: 720 }, { width: 1024, height: 576 }, { video_frames: 145 }, { video_frames: 193 }]) {
+    assert.throws(() => prepare(spec, { prompt: 'x', ...bad }), (e) => e.code === 'LTX_LIMIT' && /540p|5 ?s|121/.test(e.message), JSON.stringify(bad));
+  }
+  for (const bad of [{ width: 970, height: 544 }, { video_frames: 50 }, { video_frames: 100 }]) {
+    assert.throws(() => prepare(spec, { prompt: 'x', ...bad }), (e) => e.code === 'LTX_LIMIT' && /multiple|8n\+1|32/.test(e.message), JSON.stringify(bad));
+  }
+  for (const ok of [{ width: 960, height: 544, video_frames: 121 }, { width: 640, height: 352, video_frames: 33 }, { width: 544, height: 960, video_frames: 97 }]) assert.doesNotThrow(() => prepare(spec, { prompt: 'x', ...ok }), JSON.stringify(ok));
+});

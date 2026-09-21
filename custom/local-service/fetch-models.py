@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Download the model files ogai-local needs for the text-to-video models, verified against Hugging Face's own SHA-256.
 
-  custom/local-service/fetch-models.py [--group wan-t2v|hunyuan|all] [--list]
+  custom/local-service/fetch-models.py [--group wan-t2v|hunyuan|ltx|all] [--list]
 
 Files land in $OGAI_DATA/local-ai/models/extended (the service always searches it; see src/config.js). Resumable (re-run after an
 interruption), idle-friendly (use `ionice -c3 nice -n19` on a busy host) and safe to re-run: files that already verify are skipped.
@@ -22,6 +22,13 @@ GROUPS = {
         ('Comfy-Org/HunyuanVideo_1.5_repackaged', 'split_files/text_encoders/byt5_small_glyphxl_fp16.safetensors'),
         ('Comfy-Org/HunyuanVideo_1.5_repackaged', 'split_files/vae/hunyuanvideo15_vae_fp16.safetensors'),
         ('Comfy-Org/HunyuanVideo_1.5_repackaged', 'split_files/diffusion_models/hunyuanvideo1.5_480p_t2v_fp16.safetensors'),
+    ],
+    'ltx': [  # LTX-2.3 22B distilled (8 steps, cfg 1), Q4_K_M GGUF: fits the V100 entirely, no CPU block-cycling (see the catalog note)
+        ('unsloth/LTX-2.3-GGUF', 'distilled-1.1/ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf'),
+        ('unsloth/LTX-2.3-GGUF', 'vae/ltx-2.3-22b-distilled_video_vae.safetensors'),
+        ('unsloth/LTX-2.3-GGUF', 'vae/ltx-2.3-22b-distilled_audio_vae.safetensors'),
+        ('unsloth/LTX-2.3-GGUF', 'text_encoders/ltx-2.3-22b-distilled_embeddings_connectors.safetensors'),
+        ('unsloth/gemma-3-12b-it-qat-GGUF', 'gemma-3-12b-it-qat-UD-Q4_K_XL.gguf'),
     ],
 }
 
