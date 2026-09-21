@@ -15,6 +15,7 @@ async function post(url, body, fetchImpl, timeoutMs) {
 }
 
 const MAX_EST_SECONDS = 14400;   // the arbiter rejects est_seconds above this
+const boot = { leaseRequested: false };   // set once THIS process asks for any lease (see releaseStaleLeaseWithRetry)
 
 /**
  * Take a gpu-arbiter lease on the V100 (a whole-card lease evicts the Hermes brain + TTS). /acquire blocks until granted.
@@ -23,6 +24,7 @@ const MAX_EST_SECONDS = 14400;   // the arbiter rejects est_seconds above this
 async function acquireLease(cfg, { consumer, vramGb, estSeconds, note }, { fetchImpl = fetch, log = console, acquireTimeoutMs = 30 * 60 * 1000 } = {}) {
   if (!cfg.arbiterUrl) throw codeError('ARBITER_UNCONFIGURED', 'refusing to run a V100 job without the GPU arbiter (set OGAI_ARBITER_URL)');
 
+  boot.leaseRequested = true;
   const acquired = await post(`${cfg.arbiterUrl}/acquire`, { consumer, vram_gb: vramGb, est_seconds: Math.min(estSeconds, MAX_EST_SECONDS), wait: true, note }, fetchImpl, acquireTimeoutMs);
   if (!acquired.ok || acquired.data?.ok === false || !acquired.data?.lease_id) {
     const detail = acquired.data?.detail || acquired.data?.note || `HTTP ${acquired.status}`;
@@ -65,11 +67,28 @@ async function releaseStaleLease(cfg, { fetchImpl = fetch, log = console } = {})
     if (!res.ok) { log.warn(`gate: stale-lease release got HTTP ${res.status}`); return { released: false, reason: `HTTP ${res.status}` }; }
     const released = /^released after/.test(note);
     if (released) log.warn(`gate: released a stale ${cfg.sdcppConsumer} lease left by a previous process (${note})`);
-    return { released, reason: note };
+    return { released, reason: note, answered: true };
   } catch (err) {
     log.warn(`gate: stale-lease release failed: ${err.message}`);
     return { released: false, reason: err.message };
   }
 }
 
-module.exports = { acquireLease, withLease, releaseStaleLease, codeError, MAX_EST_SECONDS };
+/**
+ * releaseStaleLease with retries, for the boot path. A single attempt that hits an arbiter that is busy (it answers nothing while it stops
+ * or starts containers) would leave the dead process's lease held until the arbiter's own expiry (2x the window, hours) with the brain
+ * evicted. Retries stop at the first real arbiter reply, and as soon as THIS process has asked for a lease of its own: a later release by
+ * consumer name would otherwise cancel that live lease.
+ */
+async function releaseStaleLeaseWithRetry(cfg, { delaysMs = [5_000, 10_000, 20_000, 30_000, 60_000], sleep = (ms) => new Promise((r) => setTimeout(r, ms)), ...deps } = {}) {
+  let out = await releaseStaleLease(cfg, deps);
+  for (const delay of delaysMs) {
+    if (out.answered || !cfg.arbiterUrl || out.reason === 'no arbiter configured') return out;
+    await sleep(delay);
+    if (boot.leaseRequested) return { released: false, reason: 'gave up retrying: this process already requested a lease' };
+    out = await releaseStaleLease(cfg, deps);
+  }
+  return out;
+}
+
+module.exports = { acquireLease, withLease, releaseStaleLease, releaseStaleLeaseWithRetry, codeError, MAX_EST_SECONDS, _boot: boot };

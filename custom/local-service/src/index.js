@@ -4,7 +4,7 @@ const { loadConfig } = require('./config');
 const { loadEngines } = require('./engines');
 const { syncBundledBinary } = require('./bundle');
 const { JobQueue } = require('./queue');
-const { releaseStaleLease } = require('./gate');
+const { releaseStaleLeaseWithRetry } = require('./gate');
 const { pruneTmp } = require('./tmp');
 const { createRunner } = require('./runner');
 const { createService } = require('./service');
@@ -25,8 +25,8 @@ const service = createService({ standin, queue, config });
 const mcp = createMcp({ config, queue, service });
 const server = createServer({ config, standin, queue, service, mcp });
 
-// A previous process may have died holding the V100 lease (brain stays evicted until the arbiter expires it): give it back.
-releaseStaleLease(config).catch(() => {});
+// A previous process may have died holding the V100 lease (brain stays evicted until the arbiter expires it): give it back (retried while the arbiter is busy).
+releaseStaleLeaseWithRetry(config).catch(() => {});
 
 server.listen(config.port, '0.0.0.0', () => {
   console.log(`ogai-local listening on :${config.port} (gpuEnabled=${config.gpuEnabled}, arbiter=${config.arbiterUrl ? 'configured' : 'none'}, token=${config.token ? 'set' : 'MISSING'})`);

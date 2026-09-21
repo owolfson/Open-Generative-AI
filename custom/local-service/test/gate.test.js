@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { withLease, acquireLease, releaseStaleLease } = require('../src/gate');
+const { withLease, acquireLease, releaseStaleLease, releaseStaleLeaseWithRetry, _boot } = require('../src/gate');
 const { startFakeArbiter } = require('./helpers/fake-arbiter');
 
 const quiet = () => { const logs = { warn: [], error: [] }; return { logs, log: { warn: (m) => logs.warn.push(m), error: (m) => logs.error.push(m) } }; };
@@ -95,4 +95,30 @@ test('releaseStaleLease releases by consumer name at boot and never throws', asy
   assert.deepEqual(await releaseStaleLease({ arbiterUrl: '', sdcppConsumer: 'ogai-local' }, { log: quiet().log }), { released: false, reason: 'no arbiter configured' });
   const down = await releaseStaleLease({ arbiterUrl: 'http://127.0.0.1:1', sdcppConsumer: 'ogai-local' }, { log: quiet().log });
   assert.equal(down.released, false);
+});
+
+test('boot-time release retries while the arbiter is busy, and stops at the first real reply', async () => {
+  _boot.leaseRequested = false;
+  const cfg = { arbiterUrl: 'http://arbiter.test', sdcppConsumer: 'ogai-local' };
+  const sleeps = []; let n = 0;
+  const flaky = async () => { if (++n < 3) throw new Error('timed out'); return { ok: true, status: 200, json: async () => ({ ok: true, note: 'released after 900.0s' }) }; };
+  const out = await releaseStaleLeaseWithRetry(cfg, { fetchImpl: flaky, log: quiet().log, sleep: async (ms) => { sleeps.push(ms); } });
+  assert.equal(n, 3); assert.equal(out.released, true); assert.deepEqual(sleeps, [5000, 10000]);
+  // "not the active holder" is a real answer: nothing stale, so no more attempts
+  n = 0; const nothing = async () => { n++; return { ok: true, status: 200, json: async () => ({ ok: true, note: 'not the active holder (active=none)' }) }; };
+  assert.equal((await releaseStaleLeaseWithRetry(cfg, { fetchImpl: nothing, log: quiet().log, sleep: async () => {} })).released, false); assert.equal(n, 1);
+});
+
+test('boot-time release gives up after the last delay, and never retries once this process has asked for its own lease', async () => {
+  const cfg = { arbiterUrl: 'http://arbiter.test', sdcppConsumer: 'ogai-local' };
+  _boot.leaseRequested = false; let n = 0;
+  const dead = async () => { n++; throw new Error('timed out'); };
+  const out = await releaseStaleLeaseWithRetry(cfg, { fetchImpl: dead, log: quiet().log, sleep: async () => {}, delaysMs: [1, 1, 1] });
+  assert.equal(n, 4); assert.equal(out.released, false);
+  // a lease requested by this process between attempts must NOT be released by a later retry (it would kill the live lease)
+  n = 0; _boot.leaseRequested = false;
+  const out2 = await releaseStaleLeaseWithRetry(cfg, { fetchImpl: dead, log: quiet().log, delaysMs: [1, 1, 1], sleep: async () => { _boot.leaseRequested = true; } });
+  assert.equal(n, 1); assert.match(out2.reason, /already requested a lease/);
+  _boot.leaseRequested = false;
+  assert.deepEqual(await releaseStaleLeaseWithRetry({ arbiterUrl: '', sdcppConsumer: 'ogai-local' }, { log: quiet().log }), { released: false, reason: 'no arbiter configured' });
 });

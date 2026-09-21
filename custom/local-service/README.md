@@ -48,11 +48,18 @@ Upstream passes no offload/tiling flags to sd-cli, so bigger models than these w
 
 ## GPU arbiter registration (V100)
 `ogai-local` is registered in gpu-arbiter. The arbiter's `app.py` is outside this repo (bind-mounted read-only from
-`/mnt/user/appdata/gpu-arbiter/app.py`), so the change is recorded here. Three edits, made with a timestamped backup:
+`/mnt/user/appdata/gpu-arbiter/app.py`), so the change is recorded here. Four edits, each made with a timestamped backup:
 1. `PRIORITIES["ogai-local"] = 4` (same class as the other media consumers).
-2. `CONSUMER_PEAK_VRAM_GB["ogai-local"] = 10.0`. Registry names must equal the docker container name.
+2. `CONSUMER_PEAK_VRAM_GB["ogai-local"] = 28.0` (the whole-card claim the runner requests; the figure only feeds the arbiter's
+   informational `can_fit`, `/acquire` uses the request's own `vram_gb`). Registry names must equal the docker container name.
 3. `_UI_ONLY_CONSUMER_ALIASES` += `"ogai-local"`. The container is always up but holds VRAM only inside a lease; without this
    `_persistent_holder_running()` sees a running registered container and blocks restoring hermes-llm/speaches forever.
+4. `/gpu/ambient_safe` also answers `safe: false` while a lease is held or queued (before: only "a persistent holder container is
+   running"). Because of (3) the holder check can never see `ogai-local`, so the host's "Speaches 1080 Guard" (cron every 5 min, starts
+   `speaches-chatterbox` whenever that endpoint says safe) revived the TTS onto the V100 in the middle of a 28GB lease (found by the
+   battle test: guard log `speaches down -> starting` at the +236s mark of a lease). The lease leg is additional, not a replacement:
+   the 2026-09-01 acestep incident was a lease-ONLY check going clear while a persistent holder still ran, which the holder check keeps
+   covering.
 
 Apply with `cd /boot/config/plugins/compose.manager/projects/Hermes && docker compose -p hermes up -d --no-deps --force-recreate gpu-arbiter`
 (never a bare `docker restart`; only while no lease is held). The gate (`src/gate.js`) never runs a V100 job without a granted lease and
