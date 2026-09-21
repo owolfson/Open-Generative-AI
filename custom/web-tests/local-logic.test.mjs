@@ -70,6 +70,7 @@ test('history: newest first, deduped by id, capped', () => {
 
 test('error messages and durations are human readable', () => {
   assert.match(explainError({ code: 'ARBITER_REFUSED' }), /V100 is busy/);
+  assert.match(explainError({ code: 'JOB_LOST' }), /restarted.*lost/);
   assert.equal(explainError({ code: 'WEIRD', message: 'raw message' }), 'raw message');
   assert.equal(explainError(null), 'Local generation failed.');
   assert.deepEqual([formatDuration(4200), formatDuration(65_000), formatDuration(600_000)], ['4s', '1m 05s', '10m 00s']);

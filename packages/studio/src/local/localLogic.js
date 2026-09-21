@@ -117,6 +117,7 @@ export function explainError(err) {
     ARBITER_REFUSED: 'The GPU arbiter refused the request (the V100 is busy). Try again shortly.',
     IMAGE_REQUIRED: 'This model needs a starting image.',
     LOCAL_UNREACHABLE: 'The local inference service is not reachable.',
+    JOB_LOST: 'The local service restarted while this job was running, so the job was lost. Press Generate to run it again.',
     LOCAL_NOT_CONFIGURED: 'The local inference service is not configured for this app.',
     CANCELLED: 'Cancelled.',
   };

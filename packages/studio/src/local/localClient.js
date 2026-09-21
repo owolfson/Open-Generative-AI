@@ -30,7 +30,13 @@ export const cancelJob = (id) => request(`/jobs/${id}/cancel`, { method: 'POST',
 /** Model management channels only (download / delete); generation always goes through submitJob. */
 export const invokeIpc = (channel, ...args) => request(`/ipc/${channel}`, { method: 'POST', body: { args } }).then((d) => d.result);
 
-/** Poll a job until it finishes. Tolerates a few failed polls (the app server restarting, a flaky network). */
+/** Failed polls in a row that waitForJob rides out (~75s at the default interval): a `docker restart` of the local service takes ~45s. */
+export const MAX_POLL_FAILURES = 90;
+
+/**
+ * Poll a job until it finishes. Rides out the service restarting or a flaky network. Jobs live in the service's memory, so a 404 means the
+ * service restarted and forgot this job: that is reported as JOB_LOST, not as a generic failure.
+ */
 export async function waitForJob(id, { onUpdate, signal, intervalMs = 800 } = {}) {
   let failures = 0;
   for (;;) {
@@ -40,7 +46,8 @@ export async function waitForJob(id, { onUpdate, signal, intervalMs = 800 } = {}
       job = await getJob(id, signal);
       failures = 0;
     } catch (err) {
-      if (err.code === 'ABORTED' || err.status === 404 || (failures += 1) > 5) throw err;
+      if (err.status === 404) throw Object.assign(new Error('The job is gone from the service.'), { code: 'JOB_LOST', status: 404 });
+      if (err.code === 'ABORTED' || (failures += 1) > MAX_POLL_FAILURES) throw err;
     }
     if (job) {
       if (onUpdate) onUpdate(job);
