@@ -76,6 +76,7 @@ function createService({ standin, queue, config }) {
       const spec = getSpec(m.id);
       if (!spec) return m;
       const info = { ...m, vramGb: spec.vramGb };
+      if (spec.kind === 'video') info.needsImage = Boolean(spec.needsImage);   // the GUI shows the image picker only for image-to-video
       if (config && config.modelDirs) info.filesPresent = resolveFiles(spec, config.modelDirs, {}).missing.length === 0;
       return info;
     };

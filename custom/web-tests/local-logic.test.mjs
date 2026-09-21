@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { entryFromJob, mergeServerJobs, proxyUrl, modelReadiness, pickerModels, resolveDevice, buildParams, describeJob, pushHistory, explainError, formatDuration, needsV100 } from '../../packages/studio/src/local/localLogic.js';
+import { kindLabel, entryFromJob, mergeServerJobs, proxyUrl, modelReadiness, pickerModels, resolveDevice, buildParams, describeJob, pushHistory, explainError, formatDuration, needsV100 } from '../../packages/studio/src/local/localLogic.js';
 
 const flux = { id: 'wan2gp:flux-dev', name: 'Flux.1 Dev', kind: 'image', route: 'sdcpp', star: true, weightsGb: 21.6, filesPresent: true };
 const zimage = { id: 'z-image-turbo', name: 'Z-Image Turbo', kind: 'image', route: 'sdcpp', star: true, weightsGb: 4.9, state: 'downloaded', auxiliaryStatus: { llm: 'downloaded', vae: 'downloaded' } };
-const wan = { id: 'wan2gp:wan22-i2v', name: 'Wan 2.2 (Image-to-Video)', kind: 'video', route: 'sdcpp', star: true, weightsGb: 26.8, filesPresent: false };
+const wan = { id: 'wan2gp:wan22-i2v', name: 'Wan 2.2 (Image-to-Video)', kind: 'video', route: 'sdcpp', star: true, weightsGb: 26.8, filesPresent: false, needsImage: true };
+const t2v = { id: 'wan2gp:wan22-t2v', name: 'Wan 2.2 (Text-to-Video)', kind: 'video', route: 'sdcpp', star: true, weightsGb: 19.3, filesPresent: true, needsImage: false };
 const wanT2v = { id: 'wan2gp:wan22-t2v', name: 'Wan 2.2 T2V', kind: 'video', route: 'wangp', star: true };
 const health = { allowedDevices: ['v100', 'gtx1080'] };
 
@@ -29,6 +30,7 @@ test('picker: one kind, runnable engine only, starred then ready first', () => {
   const list = pickerModels([wan, wanT2v, { ...zimage, star: false }, flux, { ...flux, id: 'x', name: 'A', star: true, filesPresent: false }], 'image');
   assert.deepEqual(list.map((m) => m.id), ['wan2gp:flux-dev', 'x', 'z-image-turbo']);
   assert.deepEqual(pickerModels([wan, wanT2v, flux], 'video').map((m) => m.id), ['wan2gp:wan22-i2v']);
+  assert.deepEqual(pickerModels([wan, t2v], 'video').map((m) => m.id), ['wan2gp:wan22-t2v', 'wan2gp:wan22-i2v'], 'ready before not-ready, both kinds of video model listed');
 });
 
 test('device: auto never picks the V100 for a small model; big models need it; disabled devices are refused', () => {
@@ -86,4 +88,14 @@ test('mergeServerJobs adds unseen finished jobs oldest-first (so the newest ends
   const merged = mergeServerJobs([{ id: 'a' }], jobs, [flux], new Set(['gone']));
   assert.deepEqual(merged.map((e) => e.id), ['b', 'c', 'a']);
   assert.equal(mergeServerJobs(merged, jobs, [flux], new Set(['gone'])), merged, 'nothing new: the same list comes back (no needless writes)');
+});
+
+test('buildParams: only image-to-video models send a starting image; text-to-video never does', () => {
+  assert.equal(buildParams({ model: wan, prompt: 'x', aspect: '16:9', device: 'v100', imageBase64: 'AAAA' }).image_base64, 'AAAA');
+  assert.equal(buildParams({ model: t2v, prompt: 'x', aspect: '16:9', device: 'v100', imageBase64: 'AAAA' }).image_base64, undefined);
+  assert.equal(buildParams({ model: t2v, prompt: 'x', aspect: '16:9', device: 'v100' }).model, 'wan2gp:wan22-t2v');
+});
+
+test('kindLabel names what a video model takes', () => {
+  assert.equal(kindLabel(wan), 'image → video'); assert.equal(kindLabel(t2v), 'text → video'); assert.equal(kindLabel(flux), '');
 });

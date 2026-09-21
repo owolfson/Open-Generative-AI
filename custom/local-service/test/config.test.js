@@ -37,8 +37,10 @@ test('allowed devices default to both GPUs; values are trimmed, lower-cased and 
 });
 
 test('model dirs come from OGAI_MODEL_DIRS (colon separated) and the sd-cli / tmp paths sit under the data dir', () => {
-  assert.deepEqual(loadConfig({}).modelDirs, []);
-  assert.deepEqual(loadConfig({ OGAI_MODEL_DIRS: '/a:/b::' }).modelDirs, ['/a', '/b']);
+  // the service's own downloads (Wan T2V, Hunyuan, ...) live in <data>/local-ai/models/extended and are always searched, after the mounted stores
+  const own = loadConfig({}).modelDirs;
+  assert.equal(own.length, 1); assert.match(own[0], /local-ai\/models\/extended$/);
+  assert.deepEqual(loadConfig({ OGAI_MODEL_DIRS: '/a:/b::' }).modelDirs, ['/a', '/b', own[0]]);
   const c = loadConfig({ OGAI_DATA_DIR: '/x' });
   assert.equal(c.sdcliPath, '/x/local-ai/bin/sd-cli');
   assert.equal(c.tmpDir, '/x/local-ai/tmp');

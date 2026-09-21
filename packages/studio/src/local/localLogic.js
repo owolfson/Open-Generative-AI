@@ -9,6 +9,9 @@ export const V100_WARNING = 'The V100 is shared with Hermes: this stops the Herm
 /** Outputs are served through the proxy: '/outputs/x.mp4' -> '/api/local/outputs/x.mp4'. Data/blob/http URLs pass through. */
 export const proxyUrl = (url) => (typeof url === 'string' && url.startsWith('/outputs/') ? `/api/local${url}` : url);
 
+/** What a video model takes, for the model picker. */
+export const kindLabel = (model) => (model.kind !== 'video' ? '' : model.needsImage ? 'image → video' : 'text → video');
+
 export const needsV100 = (model) => !(typeof model.weightsGb === 'number' && model.weightsGb <= GTX1080_MAX_WEIGHTS_GB);
 
 /** Can this model be run right now, and if not, why. tone: ok | warn | muted. */
@@ -57,7 +60,7 @@ export function buildParams({ model, prompt, negative, aspect, device, advanced 
   if (model.kind === 'video') {
     if (num(advanced.frames) > 0) p.video_frames = num(advanced.frames);
     if (num(advanced.fps) > 0) p.fps = num(advanced.fps);
-    if (imageBase64) p.image_base64 = imageBase64;
+    if (model.needsImage && imageBase64) p.image_base64 = imageBase64;
   }
   return p;
 }

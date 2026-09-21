@@ -28,6 +28,7 @@ import {
   describeJob,
   explainError,
   formatDuration,
+  kindLabel,
   needsV100,
   mergeServerJobs,
   pickerModels,
@@ -215,6 +216,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     return models.find((m) => m.readiness.ready && !needsV100(m)) || models.find((m) => m.readiness.ready) || models[0] || null;
   }, [models, modelId]);
 
+  const needsImage = kind === "video" && Boolean(model && model.needsImage);   // only image-to-video models take a starting image
   const aspects = model ? aspectsFor(model) : ["1:1"];
   useEffect(() => { if (model && !aspects.includes(aspect)) setAspect(aspects[0]); }, [model, aspects, aspect]);
 
@@ -260,6 +262,19 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     window.addEventListener("ogai-local-animate", onAnimate);
     return () => window.removeEventListener("ogai-local-animate", onAnimate);
   }, [kind]);
+
+  // Giving the video studio a starting image only makes sense for an image-to-video model: switch to one (once, when the source appears).
+  const modelsRef = useRef(models);
+  modelsRef.current = models;
+  useEffect(() => {
+    if (kind !== "video" || !source) return;
+    const list = modelsRef.current;
+    const current = list.find((m) => m.id === modelId);
+    if (current && current.needsImage) return;
+    const i2v = list.find((m) => m.needsImage && m.readiness.ready) || list.find((m) => m.needsImage);
+    if (i2v) setModelId(i2v.id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source, models.length]);
 
   const finish = useCallback((done, meta) => {
     if (done.status === "cancelled") return;
@@ -327,7 +342,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     setError(null);
     let imageBase64;
     try {
-      if (kind === "video") imageBase64 = source.file ? await blobToBase64(source.file) : await urlToBase64(source.url);
+      if (needsImage) imageBase64 = source.file ? await blobToBase64(source.file) : await urlToBase64(source.url);
       const params = buildParams({ model, prompt, negative, aspect, device: device.device, advanced, imageBase64 });
       onGenerationStart?.();
       const started = await submitJob(params);
@@ -342,7 +357,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     if (!prompt.trim()) { setError("Enter a prompt first."); promptRef.current?.focus(); return; }
     if (!model.readiness.ready) { setError(`${model.name}: ${model.readiness.reason || model.readiness.label}`); return; }
     if (device.error) { setError(device.error); return; }
-    if (kind === "video" && !source) { setError("Choose a starting image first (upload one or pick a recent local image)."); setOpen("source"); return; }
+    if (needsImage && !source) { setError("Choose a starting image first (upload one or pick a recent local image)."); setOpen("source"); return; }
     if (device.v100 && !v100Confirmed.current) { setConfirm(true); return; }
     go();
   };
@@ -382,11 +397,11 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
           <div className="flex flex-col items-center justify-center h-full animate-fade-in-up min-h-[50vh]">
             <div className="w-20 h-20 rounded-3xl border border-[#22d3ee]/20 bg-[#22d3ee]/5 flex items-center justify-center mb-8"><BoltIcon className="text-[#22d3ee] scale-[2.2]" /></div>
             <h1 className="text-2xl sm:text-4xl font-extrabold tracking-tight mb-4 text-center px-4 flex flex-col items-center">
-              <span className="text-white font-black uppercase text-xl sm:text-3xl tracking-wide mb-1 opacity-90">{kind === "video" ? "Animate locally with" : "Create locally with"}</span>
+              <span className="text-white font-black uppercase text-xl sm:text-3xl tracking-wide mb-1 opacity-90">{needsImage ? "Animate locally with" : kind === "video" ? "Make video locally with" : "Create locally with"}</span>
               <span className="text-[#22d3ee] font-black uppercase text-2xl sm:text-4xl sm:mt-1 tracking-tight">{model ? model.name : "your GPUs"}</span>
             </h1>
             <p className="text-white/40 text-xs sm:text-sm font-medium tracking-wide text-center max-w-lg leading-relaxed px-4">
-              Runs on this server&apos;s own GPUs — no API key, no per-image cost.{kind === "video" ? " Wan 2.2 turns a still image into a short clip." : ""}
+              Runs on this server&apos;s own GPUs — no API key, no per-image cost.{needsImage ? " Wan 2.2 turns a still image into a short clip." : ""}
             </p>
             {models.length === 0 && status.phase === "online" && <p className="mt-4 text-xs text-amber-300">No local {kind} models are available on this server.</p>}
           </div>
@@ -397,7 +412,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
         <div className="flex flex-col gap-3">
           {v100Run && <p className="text-[11px] text-amber-300/90 px-1" data-testid="v100-note">⚠ {V100_WARNING}</p>}
           <div className="flex items-center gap-2.5 flex-wrap">
-            {kind === "video" && (
+            {needsImage && (
               <div className="relative" onClick={stop}>
                 {source ? (
                   <div className={PROMPT_MEDIA_PREVIEW_CLASS}>
@@ -439,7 +454,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleGenerate(); }}
-              placeholder={kind === "video" ? "Describe how the image should move" : "Describe the image you want to create"}
+              placeholder={needsImage ? "Describe how the image should move" : kind === "video" ? "Describe the video you want to create" : "Describe the image you want to create"}
               className="flex-1 min-w-[200px]"
               disabled={busy}
               data-testid="local-prompt"
@@ -464,7 +479,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                     {models.map((m) => (
                       <PromptMenuItem key={m.id} selected={model && m.id === model.id} disabled={!m.readiness.ready} onClick={() => pickModel(m)} wrapDescription
                         className={m.readiness.ready ? "" : "opacity-50 cursor-not-allowed"}
-                        description={`${m.weightsGb ? `${Math.round(m.weightsGb)} GB · ` : ""}${needsV100(m) ? "V100" : "GTX 1080"} · ${m.readiness.label} · ${evidenceText(m)}`}>
+                        description={`${kindLabel(m) ? `${kindLabel(m)} · ` : ""}${m.weightsGb ? `${Math.round(m.weightsGb)} GB · ` : ""}${needsV100(m) ? "V100" : "GTX 1080"} · ${m.readiness.label} · ${evidenceText(m)}`}>
                         {m.star ? "★ " : ""}{m.name}
                       </PromptMenuItem>
                     ))}

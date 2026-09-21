@@ -30,7 +30,8 @@ test('every starred model is recommended and no supported model is starred', () 
 
 test('routes: everything we can serve goes through sd.cpp; only models without weights on disk stay unwired', () => {
   for (const id of ['z-image-turbo', 'z-image-base', 'stable-diffusion-xl-base', 'wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v']) assert.equal(catalog.assess(id).route, 'sdcpp', id);
-  for (const id of ['wan2gp:wan22-t2v', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video']) assert.equal(catalog.assess(id).route, 'wangp', id);
+  assert.equal(catalog.assess('wan2gp:ltx-video').route, 'wangp');   // sd.cpp only supports LTX-2.3/2.5 (excluded), not this 0.9.8 build
+  for (const id of ['wan2gp:wan22-t2v', 'wan2gp:hunyuan-video']) assert.equal(catalog.assess(id).route, 'sdcpp', id);
 });
 
 test('evidence: only models actually run on this box are proven, and provenOn says on which GPU', () => {

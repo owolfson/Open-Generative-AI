@@ -39,9 +39,9 @@ test('catalogPayload annotates upstream sd.cpp models, flags unknown ones, adds 
   assert.equal(byId['z-image-turbo'].v100, 'recommended');
   assert.equal(byId['z-image-turbo'].state, 'not-downloaded');
   assert.equal(byId.mystery.v100, 'unknown');
-  assert.equal(byId['wan2gp:wan22-t2v'].route, 'wangp');
+  assert.equal(byId['wan2gp:wan22-t2v'].route, 'sdcpp');   // text-to-video is served by sd.cpp now (Wan T2V + HunyuanVideo 1.5)
   // upstream-served sd.cpp models appear only if the engine listed them; the extended ones (own specs) are always known
-  assert.deepEqual(models.filter((m) => m.route === 'sdcpp').map((m) => m.id).sort(), ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'z-image-turbo']);
+  assert.deepEqual(models.filter((m) => m.route === 'sdcpp').map((m) => m.id).sort(), ['wan2gp:flux-dev', 'wan2gp:hunyuan-video', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'z-image-turbo']);
   assert.ok(excluded.some((e) => e.id === 'ltx-2.3-22b'));
 });
 
@@ -54,7 +54,9 @@ test('catalogPayload tells agents which extended models are runnable right now (
   assert.equal(byId['wan2gp:flux-dev'].vramGb, 29);   // measured peak on the V100
   assert.equal(byId['wan2gp:qwen-image'].filesPresent, false);
   assert.equal(byId['wan2gp:wan22-i2v'].filesPresent, false);
-  assert.equal(byId['wan2gp:hunyuan-video'].filesPresent, undefined, 'models with no engine are not judged');
+  assert.equal(byId['wan2gp:ltx-video'].filesPresent, undefined, 'models with no engine are not judged');
+  assert.equal(byId['wan2gp:wan22-i2v'].needsImage, true); assert.equal(byId['wan2gp:wan22-t2v'].needsImage, false); assert.equal(byId['wan2gp:hunyuan-video'].needsImage, false);   // the GUI shows the image picker only when needed
+  assert.equal(byId['wan2gp:flux-dev'].needsImage, undefined, 'image models have no such flag');
 });
 
 // ---------- image input for image-to-video ----------

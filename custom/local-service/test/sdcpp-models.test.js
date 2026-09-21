@@ -142,3 +142,40 @@ test('every extended model decodes with --vae-tiling (measured: the untiled VAE 
     assert.ok(args.includes('--vae-tiling'), id);
   }
 });
+
+// ---------- text-to-video: Wan 2.2 T2V and HunyuanVideo 1.5 (no input image) ----------
+const T2V_FILES = { diffusion: '/m/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: '/m/Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf', vae: '/m/Wan2_1_VAE_bf16.safetensors', t5xxl: '/m/umt5_xxl_fp8_e4m3fn_scaled.safetensors' };
+const HY_FILES = { diffusion: '/m/hunyuanvideo1.5_480p_t2v_fp16.safetensors', vae: '/m/hunyuanvideo15_vae_fp16.safetensors', llm: '/m/qwen_2.5_vl_7b_fp8_scaled.safetensors', t5xxl: '/m/byt5_small_glyphxl_fp16.safetensors' };
+
+test('text-to-video specs exist: video/avi, NO input image, distinct from image-to-video', () => {
+  for (const id of ['wan2gp:wan22-t2v', 'wan2gp:hunyuan-video']) {
+    const spec = getSpec(id);
+    assert.equal(spec.kind, 'video', id); assert.equal(spec.ext, 'avi', id); assert.ok(!spec.needsImage, id);
+    assert.doesNotThrow(() => prepare(spec, { prompt: 'x' }), id);          // no IMAGE_REQUIRED
+    assert.ok(spec.vramGb > 10, id);
+  }
+  assert.equal(getSpec('wan2gp:wan22-i2v').needsImage, true);
+});
+
+test('Wan 2.2 T2V: the I2V recipe (both experts, 10+8 steps, cfg 3.5, te params in RAM, vae tiling) minus the init image; its own weights', () => {
+  const spec = getSpec('wan2gp:wan22-t2v');
+  assert.deepEqual(Object.values(spec.files).sort(), ['Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf', 'Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf', 'Wan2_1_VAE_bf16.safetensors', 'umt5_xxl_fp8_e4m3fn_scaled.safetensors']);
+  const args = buildArgs(spec, prepare(spec, { prompt: 'a lovely cat' }), T2V_FILES, '/o.avi');
+  assert.ok(pair(args, '-M', 'vid_gen')); assert.ok(pair(args, '--diffusion-model', T2V_FILES.diffusion)); assert.ok(pair(args, '--high-noise-diffusion-model', T2V_FILES.high_noise));
+  assert.equal(args.includes('-i'), false, 'text-to-video has no init image');
+  assert.ok(pair(args, '--steps', 10)); assert.ok(pair(args, '--high-noise-steps', 8)); assert.ok(pair(args, '--cfg-scale', 3.5)); assert.ok(pair(args, '--high-noise-cfg-scale', 3.5));
+  assert.ok(pair(args, '-W', 640)); assert.ok(pair(args, '-H', 368)); assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '-n', NEG_WAN));
+  assert.ok(pair(args, '--params-backend', 'te=cpu')); assert.ok(args.includes('--vae-tiling')); assert.equal(args.includes('--offload-to-cpu'), false); assert.equal(args.includes('--lora-model-dir'), false);
+  assert.throws(() => prepare(spec, { prompt: 'x', fast: true }), { code: 'FAST_UNAVAILABLE' });
+});
+
+test('HunyuanVideo 1.5: sd.cpp doc recipe (diffusion + vae + Qwen2.5-VL as --llm + ByT5 as --t5xxl, cfg 6, euler, fa, tiling), single expert, no LoRA', () => {
+  const spec = getSpec('wan2gp:hunyuan-video');
+  assert.deepEqual(Object.values(spec.files).sort(), ['byt5_small_glyphxl_fp16.safetensors', 'hunyuanvideo1.5_480p_t2v_fp16.safetensors', 'hunyuanvideo15_vae_fp16.safetensors', 'qwen_2.5_vl_7b_fp8_scaled.safetensors']);
+  const args = buildArgs(spec, prepare(spec, { prompt: 'a lovely cat', seed: 5 }), HY_FILES, '/o.avi');
+  assert.ok(pair(args, '-M', 'vid_gen')); assert.ok(pair(args, '--diffusion-model', HY_FILES.diffusion)); assert.ok(pair(args, '--vae', HY_FILES.vae));
+  assert.ok(pair(args, '--llm', HY_FILES.llm)); assert.ok(pair(args, '--t5xxl', HY_FILES.t5xxl));
+  assert.ok(pair(args, '--cfg-scale', 6)); assert.ok(pair(args, '--sampling-method', 'euler')); assert.ok(args.includes('--diffusion-fa')); assert.ok(args.includes('--vae-tiling'));
+  assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--params-backend', 'te=cpu'));
+  assert.equal(args.includes('--high-noise-diffusion-model'), false); assert.equal(args.includes('-i'), false);
+});
