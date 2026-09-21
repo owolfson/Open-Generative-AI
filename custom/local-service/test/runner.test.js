@@ -311,3 +311,30 @@ test('a batch that would outrun the arbiter\'s 4h est_seconds cap is split, not 
   assert.ok(gate.calls[0].estSeconds <= 14400, `est_seconds ${gate.calls[0].estSeconds} must stay within the arbiter's limit`);
   await r.shutdown();
 });
+
+// ---------- video: browsers cannot play sd.cpp's MJPEG .avi, so the artifact served is an .mp4 ----------
+function videoRun({ mp4 }) {
+  const { standin, gate } = fakes();
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)], ffmpegPath: '/opt/ffmpeg' });
+  const warnings = [];
+  const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: fakeSdcli('AVIBYTES'), mp4Impl: mp4, log: { warn: (m) => warnings.push(m), error() {} } });
+  const run = () => r.run(job({ params: { model: 'wan2gp:wan22-i2v', prompt: 'it moves', device: 'v100', init_image: '/tmp/in.png', seed: 9 } }), ctx());
+  return { cfg, run, warnings };
+}
+
+test('a finished video is converted to mp4: the mp4 is the artifact, the avi stays as `source`', async () => {
+  const seen = [];
+  const { cfg, run } = videoRun({ mp4: async ({ ffmpeg, input, output }) => { seen.push({ ffmpeg, input: path.basename(input), output: path.basename(output) }); fs.writeFileSync(output, 'MP4BYTES'); return output; } });
+  const out = await run();
+  assert.deepEqual(seen, [{ ffmpeg: '/opt/ffmpeg', input: 'job1.avi', output: 'job1.mp4' }]);
+  assert.deepEqual({ file: out.file, url: out.url, kind: out.kind, mime: out.mime, source: out.source, bytes: out.bytes }, { file: 'job1.mp4', url: '/outputs/job1.mp4', kind: 'video', mime: 'video/mp4', source: 'job1.avi', bytes: 8 });
+  assert.equal(fs.readFileSync(path.join(cfg.outputsDir, 'job1.avi'), 'utf8'), 'AVIBYTES');
+});
+
+test('if the mp4 conversion fails the job still succeeds with the avi, and says why', async () => {
+  const { run, warnings } = videoRun({ mp4: async () => { throw Object.assign(new Error('ffmpeg exploded'), { code: 'FFMPEG_FAILED' }); } });
+  const out = await run();
+  assert.equal(out.file, 'job1.avi'); assert.equal(out.mime, 'video/x-msvideo');
+  assert.match(out.warning, /mp4 conversion failed.*ffmpeg exploded/);
+  assert.equal(warnings.length, 1);
+});

@@ -35,7 +35,7 @@ async function boot({ token = 'tok', run } = {}) {
   const server = createServer({ config: { token, gpuEnabled: true, outputsDir, allowedDevices: ['gtx1080'] }, standin, queue, service, mcp });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { base, standin, queue, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) };
+  return { base, standin, queue, outputsDir, close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(r); }) };
 }
 
 const jsonPost = (url, body, headers = auth) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
@@ -191,5 +191,27 @@ test('/ipc generate for a video job returns the file url (there is no data URL f
   try {
     const out = await (await jsonPost(`${app.base}/ipc/local-ai:generate`, { args: [{ model: 'z-image-turbo', prompt: 'x' }] })).json();
     assert.deepEqual(out, { ok: true, result: { url: '/outputs/v.avi', seed: 3 } });
+  } finally { await app.close(); }
+});
+
+test('/outputs serves mp4 and honours Range requests (browsers need 206 to play and seek video)', async () => {
+  const app = await boot();
+  try {
+    fs.writeFileSync(path.join(app.outputsDir, 'v.mp4'), '0123456789');
+    const full = await fetch(`${app.base}/outputs/v.mp4`, { headers: auth });
+    assert.equal(full.status, 200);
+    assert.equal(full.headers.get('content-type'), 'video/mp4');
+    assert.equal(full.headers.get('accept-ranges'), 'bytes');
+    assert.equal(await full.text(), '0123456789');
+    const part = await fetch(`${app.base}/outputs/v.mp4`, { headers: { ...auth, range: 'bytes=2-5' } });
+    assert.equal(part.status, 206);
+    assert.equal(part.headers.get('content-range'), 'bytes 2-5/10');
+    assert.equal(await part.text(), '2345');
+    const tail = await fetch(`${app.base}/outputs/v.mp4`, { headers: { ...auth, range: 'bytes=7-' } });
+    assert.equal(tail.headers.get('content-range'), 'bytes 7-9/10'); assert.equal(await tail.text(), '789');
+    const suffix = await fetch(`${app.base}/outputs/v.mp4`, { headers: { ...auth, range: 'bytes=-3' } });
+    assert.equal(suffix.headers.get('content-range'), 'bytes 7-9/10');
+    assert.equal((await fetch(`${app.base}/outputs/v.mp4`, { headers: { ...auth, range: 'bytes=50-60' } })).status, 416);
+    assert.equal((await fetch(`${app.base}/outputs/v.mp4`, { headers: { ...auth, range: 'garbage' } })).status, 200, 'an unparseable Range is ignored');
   } finally { await app.close(); }
 });

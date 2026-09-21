@@ -9,6 +9,7 @@ function loadConfig(env = process.env) {
     outputsDir: path.join(dataDir, 'outputs'),
     sdcliPath: path.join(dataDir, 'local-ai', 'bin', 'sd-cli'),          // where the boot-time bundle sync puts the CUDA sd-cli
     tmpDir: path.join(dataDir, 'local-ai', 'tmp'),
+    ffmpegPath: env.OGAI_FFMPEG || '/usr/local/bin/ffmpeg',                // turns sd.cpp's MJPEG .avi into a browser-playable .mp4
     modelDirs: (env.OGAI_MODEL_DIRS || '').split(':').filter(Boolean),    // read-only mounts searched (by basename) for extended models
     upstreamDir: env.OGAI_UPSTREAM_DIR || '/app',           // repo root that contains electron/lib
     resourcesPath: env.OGAI_RESOURCES_PATH || '',           // holds local-ai/<platform>-<arch>/bin/sd-cli

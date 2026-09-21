@@ -6,6 +6,8 @@ WORKDIR /srv
 # sd.cpp built with CUDA by build-sdcpp.sh (run it first). The stand-in presents this directory to upstream's
 # engine as its "bundled binary", so the upstream CPU-only download is never used.
 COPY custom/local-service/vendor/sdcpp/ /opt/ogai/resources/local-ai/linux-x64/bin/
+# Static ffmpeg (fetch-ffmpeg.sh): re-encodes sd.cpp's MJPEG .avi to a browser-playable .mp4. Own layer: rarely changes.
+COPY custom/local-service/vendor/ffmpeg/ffmpeg /usr/local/bin/ffmpeg
 COPY electron/lib /app/electron/lib
 COPY custom/local-service/package.json ./package.json
 COPY custom/local-service/src ./src

@@ -5,6 +5,7 @@ const { acquireLease, codeError, MAX_EST_SECONDS } = require('./gate');
 const { assess } = require('./catalog');
 const { getSpec, resolveFiles, prepare, buildArgs } = require('./sdcpp-models');
 const { runSdCli } = require('./sdcpp');
+const { toMp4 } = require('./video');
 
 const GTX1080_MAX_WEIGHTS_GB = 5.5;   // ~6GB of the 8GB card is free beside the resident TTS container
 
@@ -28,7 +29,7 @@ function chooseDevice(requested, allowed, weightsGb) {
   throw codeError('DEVICE_NOT_ALLOWED', 'no GPU device is enabled (OGAI_ALLOWED_DEVICES)');
 }
 
-const MIME = { png: 'image/png', avi: 'video/x-msvideo' };
+const MIME = { png: 'image/png', avi: 'video/x-msvideo', mp4: 'video/mp4' };
 
 // Upstream's pure progress parser (no electron needed); without it jobs still run, just without progress events.
 function loadProgressParser(upstreamDir) {
@@ -51,7 +52,7 @@ const EST_VIDEO_SECONDS = 1800;
  * soon as the next queued job is not a V100 job it covers, the job failed or was cancelled, nothing else is queued (after a
  * short grace so a submit racing the end of a job can still join), or the service shuts down.
  */
-function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, log = console, idleReleaseMs = 10_000 }) {
+function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, mp4Impl = toMp4, log = console, idleReleaseMs = 10_000 }) {
   const parseChunk = loadProgressParser(config.upstreamDir || '');
   const emitProgress = (data) => { if (standin.events && standin.events.emit) standin.events.emit('send', 'local-ai:progress', data); };
 
@@ -164,7 +165,23 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
       env: { CUDA_DEVICE_ORDER: 'PCI_BUS_ID', CUDA_VISIBLE_DEVICES: String(d.onGtx1080 ? config.deviceIndex1080 : config.deviceIndexV100) },
       signal, onProgress: emitProgress, parseChunk,
     });
-    return persistFile(job, d.spec, d.params.seed, outPath);
+    const result = persistFile(job, d.spec, d.params.seed, outPath);
+    return d.spec.kind === 'video' ? withMp4(result) : result;
+  }
+
+  // Browsers cannot play sd.cpp's MJPEG .avi: make the served artifact an mp4 and keep the avi as `source`. A failed
+  // conversion never fails the job (the GPU work is done): the avi is returned with a warning saying why.
+  async function withMp4(result) {
+    const input = path.join(config.outputsDir, result.file);
+    const mp4File = result.file.replace(/\.avi$/, '.mp4');
+    try {
+      await mp4Impl({ ffmpeg: config.ffmpegPath, input, output: path.join(config.outputsDir, mp4File) });
+    } catch (err) {
+      log.warn(`runner: mp4 conversion failed (${err.message}); serving the avi`);
+      return { ...result, warning: `mp4 conversion failed (${err.message}); this is the raw MJPEG avi, which browsers cannot play` };
+    }
+    const bytes = fs.statSync(path.join(config.outputsDir, mp4File)).size;
+    return { ...result, file: mp4File, url: `/outputs/${mp4File}`, mime: MIME.mp4, bytes, source: result.file };
   }
 
   async function run(job, ctx) {

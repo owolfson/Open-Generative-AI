@@ -13,6 +13,28 @@ function send(res, status, body) {
   res.end(data);
 }
 
+const OUTPUT_MIME = { png: 'image/png', avi: 'video/x-msvideo', mp4: 'video/mp4' };
+
+// Files are streamed and honour a single Range (browsers need 206 to play and seek video); an unparseable Range is ignored.
+function serveFile(req, res, file, mime) {
+  const size = fs.statSync(file).size;
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  const base = { 'content-type': mime, 'accept-ranges': 'bytes' };
+  if (!range || (range[1] === '' && range[2] === '')) {
+    res.writeHead(200, { ...base, 'content-length': size });
+    return fs.createReadStream(file).pipe(res);
+  }
+  let start; let end;
+  if (range[1] === '') { start = Math.max(0, size - Number(range[2])); end = size - 1; }          // bytes=-N: the last N bytes
+  else { start = Number(range[1]); end = range[2] === '' ? size - 1 : Math.min(Number(range[2]), size - 1); }
+  if (start >= size || start > end) {
+    res.writeHead(416, { ...base, 'content-range': `bytes */${size}` });
+    return res.end();
+  }
+  res.writeHead(206, { ...base, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': end - start + 1 });
+  return fs.createReadStream(file, { start, end }).pipe(res);
+}
+
 function readJson(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -85,13 +107,11 @@ function createServer({ config, standin, queue, service, mcp }) {
       return queue.get(m[1]) ? send(res, 200, { cancelled: queue.cancel(m[1]) }) : send(res, 404, { error: 'no such job' });
     }
 
-    m = /^\/outputs\/([\w.-]+\.(png|avi))$/.exec(pathname);
+    m = /^\/outputs\/([\w.-]+\.(png|avi|mp4))$/.exec(pathname);
     if (method === 'GET' && m) {
       const file = path.join(config.outputsDir, path.basename(m[1]));
       if (!fs.existsSync(file)) return send(res, 404, { error: 'not found' });
-      const data = fs.readFileSync(file);
-      res.writeHead(200, { 'content-type': m[2] === 'avi' ? 'video/x-msvideo' : 'image/png', 'content-length': data.length });
-      return res.end(data);
+      return serveFile(req, res, file, OUTPUT_MIME[m[2]]);
     }
 
     if (method === 'GET' && pathname === '/events') {
