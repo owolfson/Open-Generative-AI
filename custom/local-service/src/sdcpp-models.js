@@ -28,7 +28,7 @@ const SPECS = {
       '--sampling-method', 'euler', '--diffusion-fa', '--flow-shift', str(p.flow_shift), ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
   },
   'wan2gp:wan22-i2v': {
-    id: 'wan2gp:wan22-i2v', kind: 'video', ext: 'avi', vramGb: 26, needsImage: true,
+    id: 'wan2gp:wan22-i2v', kind: 'video', ext: 'avi', vramGb: 27, needsImage: true,
     files: {
       diffusion: 'Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
@@ -36,14 +36,15 @@ const SPECS = {
     },
     // fast (default): the lightx2v 4-step LoRAs, cfg 1. quality (fast:false): sd.cpp's documented 10+8 steps, cfg 3.5, no LoRA.
     defaults: (params) => (params.fast === false
-      ? { width: 832, height: 480, steps: 10, high_noise_steps: 8, cfg_scale: 3.5, high_noise_cfg_scale: 3.5, video_frames: 33, fps: 16, flow_shift: 3, fast: false }
-      : { width: 832, height: 480, steps: 4, high_noise_steps: 4, cfg_scale: 1, high_noise_cfg_scale: 1, video_frames: 33, fps: 16, flow_shift: 3, fast: true }),
+      ? { width: 640, height: 368, steps: 10, high_noise_steps: 8, cfg_scale: 3.5, high_noise_cfg_scale: 3.5, video_frames: 33, fps: 16, flow_shift: 3, fast: false }
+      : { width: 640, height: 368, steps: 4, high_noise_steps: 4, cfg_scale: 1, high_noise_cfg_scale: 1, video_frames: 33, fps: 16, flow_shift: 3, fast: true }),
     required: (params) => (params.fast === false ? ['diffusion', 'high_noise', 'vae', 't5xxl'] : ['diffusion', 'high_noise', 'vae', 't5xxl', 'lora_low', 'lora_high']),
     prompt: (p, f) => (p.fast ? `${p.prompt}<lora:${path.parse(f.lora_low).name}:1><lora:|high_noise|${path.parse(f.lora_high).name}:1>` : p.prompt),
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--high-noise-diffusion-model', f.high_noise, '--vae', f.vae, '--t5xxl', f.t5xxl,
       '--high-noise-cfg-scale', str(p.high_noise_cfg_scale), '--sampling-method', 'euler', '--high-noise-sampling-method', 'euler',
       '--high-noise-steps', str(p.high_noise_steps), '-n', p.negative_prompt || NEG_WAN, '--diffusion-fa',
       '--video-frames', str(p.video_frames), '--fps', str(p.fps), '--flow-shift', str(p.flow_shift), '-i', p.init_image,
+      '--offload-to-cpu',   // measured on the V100: without it the 3D-VAE decode runs out of memory
       ...(p.fast ? ['--lora-model-dir', path.dirname(f.lora_low)] : [])],   // both lightx2v LoRAs live in the same directory
   },
 };
@@ -79,9 +80,14 @@ function resolveFiles(spec, dirs, params = {}) {
   return { files, missing };
 }
 
-// aspect_ratio -> 64-aligned dimensions (same idea as upstream's arToDimensions): base 1024 for images, 480 for video.
+// Video sizes hold the pixel area MEASURED safe on the V100 (640x368 = 235k px; 832x480 died in the VAE decode ~570MB short),
+// all multiples of 16 as Wan needs.
+const VIDEO_DIMS = { '1:1': [480, 480], '16:9': [640, 368], '9:16': [368, 640], '4:3': [576, 432], '3:4': [432, 576] };
+
+// aspect_ratio -> 64-aligned dimensions (same idea as upstream's arToDimensions): base 1024 for images.
 function dimsFor(kind, ar) {
-  const base = kind === 'video' ? 480 : 1024;
+  if (kind === 'video') return VIDEO_DIMS[ar] || null;
+  const base = 1024;
   const align = (v) => Math.round(v / 64) * 64;
   return {
     '1:1': [base, base], '16:9': [align((base * 16) / 9), base], '9:16': [base, align((base * 16) / 9)],

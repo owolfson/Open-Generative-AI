@@ -122,3 +122,17 @@ test('text-to-image models reject an input image instead of silently ignoring it
   assert.throws(() => ctx.svc.submitGeneration({ model: 'wan2gp:flux-dev', prompt: 'x', image_job_id: src.id }), /does not take an input image/);
   assert.equal(ctx.svc.submitGeneration({ model: 'wan2gp:flux-dev', prompt: 'x', init_image: '/etc/passwd' }).params.init_image, undefined);
 });
+
+test('sd-cli progress events from the stand-in land on the running job (this is what the GUI polls)', async () => {
+  const { EventEmitter } = require('node:events');
+  const events = new EventEmitter();
+  const gate = (() => { let r; const promise = new Promise((res) => { r = res; }); return { promise, resolve: r }; })();
+  const q = new JobQueue({ run: async () => { await gate.promise; return {}; } });
+  createService({ standin: { ...standin, events }, queue: q });
+  const job = q.submit({ kind: 'image', route: 'sdcpp', params: {} });
+  await new Promise((r) => setImmediate(r));
+  events.emit('send', 'local-ai:download-progress', { step: 9 });                    // other channels are ignored
+  events.emit('send', 'local-ai:progress', { step: 3, totalSteps: 8, progress: 0.375, status: 'sampling' });
+  assert.equal(q.get(job.id).progress.step, 3);
+  gate.resolve(); await q.wait(job.id, 1000);
+});

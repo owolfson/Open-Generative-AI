@@ -148,6 +148,7 @@ test('/outputs serves PNGs, needs auth, and refuses traversal', async () => {
 test('/events streams stand-in send events as SSE', async () => {
   const app = await boot();
   try {
+    const baseline = app.standin.events.listenerCount('send');   // the service's own progress listener stays
     const chunk = await new Promise((resolve, reject) => {
       const req = http.get(`${app.base}/events`, { headers: auth }, (res) => {
         assert.equal(res.headers['content-type'], 'text/event-stream');
@@ -160,7 +161,7 @@ test('/events streams stand-in send events as SSE', async () => {
     });
     assert.match(chunk, /event: local-ai:progress\ndata: \{"step":3,"totalSteps":8\}/);
     await new Promise((r) => setTimeout(r, 30));
-    assert.equal(app.standin.events.listenerCount('send'), 0);   // listener removed when the client went away
+    assert.equal(app.standin.events.listenerCount('send'), baseline);   // the client's listener was removed when it went away
   } finally { await app.close(); }
 });
 

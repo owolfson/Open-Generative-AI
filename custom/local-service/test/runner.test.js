@@ -180,7 +180,7 @@ test('video model: avi artifact with kind video, a longer lease estimate, and no
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
   const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: sd, log: quiet });
   const out = await r.run(job({ params: { model: 'wan2gp:wan22-i2v', prompt: 'it moves', device: 'v100', init_image: '/tmp/in.png', seed: 9 } }), ctx());
-  assert.equal(gate.calls[0].vramGb, 26);
+  assert.equal(gate.calls[0].vramGb, 27);
   assert.equal(gate.calls[0].estSeconds, 1800);
   assert.ok(sd.calls[0].args.includes('vid_gen'));
   assert.deepEqual({ file: out.file, url: out.url, kind: out.kind, mime: out.mime, seed: out.seed }, { file: 'job1.avi', url: '/outputs/job1.avi', kind: 'video', mime: 'video/x-msvideo', seed: 9 });

@@ -23,6 +23,7 @@ function decodeImage(input) {
 
 /** Shared core used by both the HTTP server and the MCP endpoint. */
 function createService({ standin, queue, config }) {
+  if (standin.events && standin.events.on) standin.events.on('send', (channel, data) => { if (channel === 'local-ai:progress') queue.setProgress(data); });
   function submitGeneration(params) {
     const meta = catalog.assess(params && params.model);
     if (!meta) throw failure('UNKNOWN_MODEL', `unknown or excluded model: ${params && params.model}`, 400);

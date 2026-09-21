@@ -106,3 +106,16 @@ test('run receives pending(): the jobs queued behind the running one, in order (
   gate.resolve(); await q.wait(a.id, 1000); await q.wait(c.id, 1000);
   assert.deepEqual(seen, [[1, [2, 3]], [2, [3]], [3, []]]);
 });
+
+test('setProgress records sd-cli progress on the RUNNING job only (and is dropped once idle)', async () => {
+  const gate = (() => { let r; const promise = new Promise((res) => { r = res; }); return { promise, resolve: r }; })();
+  const q = new JobQueue({ run: async () => { await gate.promise; return {}; } });
+  q.setProgress({ step: 1, totalSteps: 4 });                       // idle: ignored, must not throw
+  const a = q.submit({ kind: 'image', route: 'sdcpp', params: {} });
+  const b = q.submit({ kind: 'image', route: 'sdcpp', params: {} });
+  await new Promise((r) => setImmediate(r));
+  q.setProgress({ step: 2, totalSteps: 4, progress: 0.5, status: 'sampling', extra: 'dropped' });
+  assert.deepEqual(q.get(a.id).progress, { step: 2, totalSteps: 4, progress: 0.5, status: 'sampling' });
+  assert.equal(q.get(b.id).progress, undefined, 'queued jobs never get progress');
+  gate.resolve(); await q.wait(a.id, 1000);
+});

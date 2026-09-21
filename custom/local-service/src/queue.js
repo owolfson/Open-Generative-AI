@@ -28,6 +28,14 @@ class JobQueue extends EventEmitter {
 
   get(id) { return this.jobs.get(id) || null; }
 
+  /** Latest sd-cli progress for the running job (single-flight: progress events always belong to it). Whitelisted fields only. */
+  setProgress({ step, totalSteps, progress, status } = {}) {
+    if (!this.current) return;
+    const job = this.jobs.get(this.current.id);
+    job.progress = { step, totalSteps, progress, status };
+    this.emit('update', job);
+  }
+
   list(limit = 50) { return [...this.jobs.values()].slice(-limit).reverse(); }
 
   cancel(id) {

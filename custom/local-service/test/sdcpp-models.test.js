@@ -101,7 +101,7 @@ test('Wan 2.2 I2V fast mode: both experts, LoRA tags for low AND high noise, 4+4
   assert.ok(pair(args, '--steps', 4)); assert.ok(pair(args, '--high-noise-steps', 4));
   assert.ok(pair(args, '--cfg-scale', 1)); assert.ok(pair(args, '--high-noise-cfg-scale', 1));
   assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--flow-shift', 3));
-  assert.ok(pair(args, '-W', 832)); assert.ok(pair(args, '-H', 480)); assert.ok(pair(args, '-n', NEG_WAN));
+  assert.ok(pair(args, '-W', 640)); assert.ok(pair(args, '-H', 368)); assert.ok(args.includes('--offload-to-cpu')); assert.ok(pair(args, '-n', NEG_WAN));
   assert.ok(args.includes('--diffusion-fa'));
 });
 
@@ -121,15 +121,18 @@ test('Wan 2.2 I2V needs an init image; explicit size/frames/fps overrides are ho
   assert.ok(pair(args, '-W', 480)); assert.ok(pair(args, '-H', 832)); assert.ok(pair(args, '--video-frames', 17)); assert.ok(pair(args, '--fps', 8));
 });
 
-test('aspect_ratio maps to dimensions (64-aligned, base 1024 for images, 480 for video); explicit width/height win', () => {
+const VIDEO_AREA_OK = ([w, h]) => w * h <= 640 * 368 * 1.1 && w % 16 === 0 && h % 16 === 0;
+
+test('aspect_ratio maps to dimensions (images 64-aligned off base 1024; video = measured-safe table); explicit width/height win', () => {
   const flux = getSpec('wan2gp:flux-dev'); const wan = getSpec('wan2gp:wan22-i2v');
   const dims = (spec, extra) => { const p = prepare(spec, { prompt: 'x', init_image: '/i.png', ...extra }); return [p.width, p.height]; };
   assert.deepEqual(dims(flux, { aspect_ratio: '1:1' }), [1024, 1024]);
   assert.deepEqual(dims(flux, { aspect_ratio: '16:9' }), [1792, 1024]);
   assert.deepEqual(dims(flux, { aspect_ratio: '9:16' }), [1024, 1792]);
   assert.deepEqual(dims(flux, { aspect_ratio: '4:3' }), [1344, 1024]);
-  assert.deepEqual(dims(wan, { aspect_ratio: '9:16' }), [480, 832]);
-  assert.deepEqual(dims(wan, { aspect_ratio: '16:9' }), [832, 480]);
+  assert.deepEqual(dims(wan, { aspect_ratio: '9:16' }), [368, 640]);
+  assert.deepEqual(dims(wan, { aspect_ratio: '16:9' }), [640, 368]);
+  assert.ok(VIDEO_AREA_OK(dims(wan, { aspect_ratio: '4:3' })) && VIDEO_AREA_OK(dims(wan, { aspect_ratio: '1:1' })), 'every video ratio stays near the measured-safe pixel area');
   assert.deepEqual(dims(flux, { aspect_ratio: '16:9', width: 512, height: 512 }), [512, 512]);
   assert.deepEqual(dims(flux, { aspect_ratio: 'nonsense' }), [1024, 1024]);
 });
