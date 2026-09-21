@@ -92,6 +92,24 @@ Findings (each one changed the code):
 - **Solved (part 3)**: `--temporal-tiling` does not help (decode still 31.8GB); `--backend te=cpu` segfaults; `--max-vram 22` fails in the diffusion ("wan.blocks.23 failed during weight preparation"); **`--params-backend te=cpu`** (T5 params in RAM, computed on the GPU, everything else on the V100) WORKS: quality mode, 640x368, 33 frames = 377s (sampling 161s, decode 39s), peak 27.4GB, host RAM never below 12GB free. This is the shipping recipe. It was then driven end-to-end from the GUI: Wan job ~7.5 min, mp4 (H.264, 640x368, 2.06s) plays in Chromium.
 - Web GUI (Image + Video studios, Settings -> Local models, header chip, local-only sign-in): verified in a real browser; a Z-Image render on the GTX 1080 was driven end-to-end from the GUI (2m24s) and viewed in the GUI.
 
+## Results, part 3 - the rest of the catalog (2026-09-21, supervised V100 sessions + GTX 1080 tests)
+
+All V100 runs: one arbiter lease per session, watcher (arbiter, brain/TTS, VRAM, host RAM), abort rules (V100 > 30GB, RAM < 3GB, > 20 min). No aborts. Hermes restored each time.
+Downloads (SHA-256 verified against Hugging Face's LFS hashes; `custom/local-service/fetch-models.py`): Wan T2V pair 19.3GB, Hunyuan 1.5 (fp16 + VAE + ByT5) 19.6GB, LTX-2.3 distilled Q4_K_M + Gemma-3-12B QAT + VAEs + connectors ~26GB, Z-Image Base Q8_0 7.2GB. Cache pool btrfs error counters stayed 0.
+
+| Model | Result | Measured |
+|---|---|---|
+| Realistic Vision v5.1, Anything v5 | PROVEN on the GTX 1080 | 512x512, ~50s; 512x768 runs out of VRAM in the VAE decode beside the resident TTS model |
+| SDXL 1.0 | PROVEN on the V100 | 1024x1024, 30 steps = 76s. Needed a compat shim: upstream asks for `dpmpp2m` and `--sd-version`, this sd.cpp spells it `dpm++2m` and dropped the flag |
+| Wan 2.2 T2V | PROVEN on the V100 | 640x368 x 33 frames = 412s, peak 27.3GB, coherent motion |
+| HunyuanVideo 1.5 (480p fp16) | PROVEN on the V100 | 640x368 x 33 frames, 30 steps = 650s. Sampling ~150s but the VAE decode needs `--vae-tiling --temporal-tiling --vae-tile-size 8x8` (default tiling wants 13GB beside the 16GB model and fails) |
+| **LTX-2.3 22B distilled (Q4_K_M GGUF)** | **PROVEN on the V100** | 640x352 x 33 frames = 130s; **960x544 x 121 frames (5s, the cap) = 418s**, ~17-21GB on the card, host RAM >= 12GB free |
+| Z-Image Base | 1080 ONLY | Upstream's Q4_K_M renders a solid WHITE image (job reports done) on both GPUs at every cfg/sampler/attention setting; the byte-identical-to-HF file is fine, the quant is the problem. Q8_0 renders correctly on the 1080 but is STILL blank on the V100 at 512 and 1024 (fp16 tensor-core overflow on Volta). Served from our spec with Q8_0, restricted to the 1080 (host-RAM offload, slow, 768-based) |
+
+**LTX decision.** The `ltx-desktop` container no longer exists on this host and its pipeline (bf16/int8, ~43GB of weights block-cycled through host RAM, 720p) crashed the host 7+ times; memory says never bypass its runner. Rather than revive it, LTX-2.3 is served through sd.cpp as a Q4_K_M GGUF: the 14GB model sits entirely in VRAM, only Gemma's params (7.4GB) live in host RAM (`--params-backend te=cpu`), so there is no RAM<->VRAM cycling and no 43GB read. The crash-history limits are enforced as code (`LTX_LIMIT`): <= 960x576 pixels, <= 121 frames, 32-aligned sizes, 8n+1 frames, refused before any lease. Video only: our sd.cpp build has WebM/WebP compiled out, so LTX's audio track is not muxed.
+
+**Compat shims** (`src/sdcli-compat.js`, installed before upstream's engine loads, so upstream files stay untouched): sampler respelling (`dpmpp*` -> `dpm++*`) and dropping the removed `--sd-version` / `--flux` flags.
+
 ## Self-Review
 
 - Covers: Flux/Qwen/Wan via sd.cpp (T1-T3), the I2V input path and MCP tool (T4), the downtime cost lesson (T5), deploy (T6), evidence with abort rules (T7).

@@ -24,6 +24,7 @@ behind a small stand-in for `require('electron')`, and exposes them over HTTP.
 Upstream's Linux sd.cpp binaries are CPU/Vulkan/ROCm only and this host's Xeon has no AVX2, so we build our own:
 ```bash
 custom/local-service/build-sdcpp.sh          # CUDA 12.6 build for sm_61 + sm_70, AVX-only CPU code -> vendor/sdcpp/ (git-ignored)
+custom/local-service/fetch-models.py         # verified downloads: --group wan-t2v|hunyuan|zimage-base|ltx (files go to $OGAI_DATA/local-ai/models/extended)
 custom/local-service/fetch-ffmpeg.sh         # static ffmpeg -> vendor/ffmpeg/ (git-ignored): sd.cpp's MJPEG avi is re-encoded to a browser-playable mp4
 custom/local-service/deploy.sh --build       # image bundles vendor/sdcpp + vendor/ffmpeg; both MUST exist before the image builds
 ```
@@ -89,7 +90,7 @@ claude mcp add --transport http ogai http://HOST:8790/mcp --header "Authorizatio
 ## Tests
 `cd custom/local-service && node --test test/*.test.js` (never pass a directory to `--test`). Zero dependencies.
 
-## Models served through sd.cpp, measured on the V100 (2026-09-20, supervised, through the arbiter)
+## Models served through sd.cpp, measured on the V100 (2026-09-20/21, supervised, through the arbiter)
 
 Model files are read from the ComfyUI stores mounted read-only (`OGAI_MODEL_MOUNTS`). One V100 lease covers a whole queued batch.
 
@@ -98,6 +99,11 @@ Model files are read from the ComfyUI stores mounted read-only (`OGAI_MODEL_MOUN
 | Flux.1 Dev (Q8_0) | 1024x1024, 20 steps, `--diffusion-fa --vae-tiling` | 160s incl. ~100s load; peak 28.8GB (VAE decode adds ~6GB) |
 | Qwen-Image 2512 (Q6_K) | 1024x1024, 20 steps, `--diffusion-fa --vae-tiling --flow-shift 3` | 187s; peak 24.5GB with tiling (31.9GB without); fp8-scaled Qwen2.5-VL encoder loads |
 | Wan 2.2 I2V (Q4_K_M pair) | quality mode only, 640x368, 33 frames, `--params-backend te=cpu --vae-tiling` | 377s; peak 27.4GB; host RAM stays >12GB free; mp4 output |
+| Wan 2.2 T2V (Q4_K_M pair) | same recipe as I2V, no init image | 412s; peak 27.3GB |
+| HunyuanVideo 1.5 (480p fp16) | 640x368, 33 frames, 30 steps, `--params-backend te=cpu --vae-tiling --temporal-tiling --vae-tile-size 8x8` | 650s; peak 26.5GB |
+| LTX-2.3 22B distilled (Q4_K_M) | 8 steps, cfg 1, te params in RAM, VAE tiling; HARD LIMITS 960x576 px / 121 frames | 640x352x33 = 130s; 960x544x121 (5s) = 418s; ~17-21GB |
+| SDXL 1.0 | upstream engine + compat shim | 1024x1024, 30 steps = 76s on the V100 |
+| Z-Image Base | our spec, Q8_0, 768-based, GTX 1080 ONLY (blank on the V100) | slow (host-RAM offload) |
 
 Do not retry (all measured to fail here): Wan "fast" lightx2v LoRAs (sd-cli aborts in every `--lora-apply-mode`), `--offload-to-cpu` for Wan
 (23.5GB of shmem -> kernel OOM kill), Wan with no placement flag (VAE decode OOM), `--max-vram` (weight-preparation failure), `--backend te=cpu` (SIGSEGV).
