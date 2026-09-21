@@ -21,7 +21,7 @@ const SPECS = {
       '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
   },
   'wan2gp:qwen-image': {
-    id: 'wan2gp:qwen-image', kind: 'image', ext: 'png', vramGb: 24,
+    id: 'wan2gp:qwen-image', kind: 'image', ext: 'png', vramGb: 25,   // measured peak 24.5GB with --vae-tiling
     files: { diffusion: 'qwen-image-2512-Q6_K.gguf', vae: 'qwen_image_vae.safetensors', llm: 'qwen_2.5_vl_7b_fp8_scaled.safetensors' },
     defaults: () => ({ width: 1024, height: 1024, steps: 20, cfg_scale: 2.5, flow_shift: 3 }),
     build: (p, f) => ['--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm,
@@ -32,21 +32,21 @@ const SPECS = {
     files: {
       diffusion: 'Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
-      lora_low: 'wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors', lora_high: 'wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors',
     },
-    // fast (default): the lightx2v 4-step LoRAs, cfg 1. quality (fast:false): sd.cpp's documented 10+8 steps, cfg 3.5, no LoRA.
-    defaults: (params) => (params.fast === false
-      ? { width: 640, height: 368, steps: 10, high_noise_steps: 8, cfg_scale: 3.5, high_noise_cfg_scale: 3.5, video_frames: 33, fps: 16, flow_shift: 3, fast: false }
-      : { width: 640, height: 368, steps: 4, high_noise_steps: 4, cfg_scale: 1, high_noise_cfg_scale: 1, video_frames: 33, fps: 16, flow_shift: 3, fast: true }),
-    required: (params) => (params.fast === false ? ['diffusion', 'high_noise', 'vae', 't5xxl'] : ['diffusion', 'high_noise', 'vae', 't5xxl', 'lora_low', 'lora_high']),
-    prompt: (p, f) => (p.fast ? `${p.prompt}<lora:${path.parse(f.lora_low).name}:1><lora:|high_noise|${path.parse(f.lora_high).name}:1>` : p.prompt),
+    // sd.cpp's documented quality recipe (10 low-noise + 8 high-noise steps, cfg 3.5 on both). The lightx2v 4-step LoRAs (the "fast"
+    // mode) are NOT offered: with these Q4_K_M GGUFs sd-cli aborts while loading the LoRAs in every --lora-apply-mode
+    // (auto / at_runtime / immediately; "gguf_init_from_reader: tensor 'patch_embedding.weight' has invalid number of dimensions: 5 > 4"),
+    // reproduced with no GPU. Quality mode is proven on the V100 (33 frames, avi).
+    defaults: () => ({ width: 640, height: 368, steps: 10, high_noise_steps: 8, cfg_scale: 3.5, high_noise_cfg_scale: 3.5, video_frames: 33, fps: 16, flow_shift: 3 }),
+    validate: (params) => {
+      if (params.fast === true) throw codeError('FAST_UNAVAILABLE', 'fast mode (lightx2v 4-step LoRAs) is unavailable: sd.cpp aborts loading those LoRAs against the Q4_K_M Wan GGUFs on this box; use the default quality mode');
+    },
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--high-noise-diffusion-model', f.high_noise, '--vae', f.vae, '--t5xxl', f.t5xxl,
       '--high-noise-cfg-scale', str(p.high_noise_cfg_scale), '--sampling-method', 'euler', '--high-noise-sampling-method', 'euler',
       '--high-noise-steps', str(p.high_noise_steps), '-n', p.negative_prompt || NEG_WAN, '--diffusion-fa',
       '--video-frames', str(p.video_frames), '--fps', str(p.fps), '--flow-shift', str(p.flow_shift), '-i', p.init_image,
       '--offload-to-cpu',   // measured on the V100: without it the 3D-VAE decode runs out of memory
-      '--vae-tiling',       // sd.cpp's own Wan recipe pairs it with --offload-to-cpu
-      ...(p.fast ? ['--lora-model-dir', path.dirname(f.lora_low)] : [])],   // both lightx2v LoRAs live in the same directory
+      '--vae-tiling'],      // sd.cpp's own Wan recipe pairs it with --offload-to-cpu
   },
 };
 
@@ -98,6 +98,7 @@ function dimsFor(kind, ar) {
 
 /** Merge defaults with the caller's params, pick a seed, and enforce required inputs. */
 function prepare(spec, params) {
+  if (spec.validate) spec.validate(params);   // refuse unsupported options before anything else (and before any lease)
   const given = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
   const p = { ...spec.defaults(given), ...given };
   const dims = given.aspect_ratio ? dimsFor(spec.kind, given.aspect_ratio) : null;

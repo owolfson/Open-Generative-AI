@@ -57,7 +57,6 @@ export function buildParams({ model, prompt, negative, aspect, device, advanced 
   if (model.kind === 'video') {
     if (num(advanced.frames) > 0) p.video_frames = num(advanced.frames);
     if (num(advanced.fps) > 0) p.fps = num(advanced.fps);
-    if (typeof advanced.fast === 'boolean') p.fast = advanced.fast;
     if (imageBase64) p.image_base64 = imageBase64;
   }
   return p;
@@ -79,6 +78,25 @@ export function describeJob(job, { device, elapsedMs = 0, kind = 'image' } = {})
   }
   if (device === 'v100' && elapsedMs < 90_000) return { text: 'Waiting for the GPU arbiter — the Hermes brain and TTS are being stopped…', pct: null };
   return { text: 'Loading model…', pct: null };
+}
+
+/** A finished server job (made from the GUI, an agent or MCP) as a history entry; null when it has nothing to show. */
+export function entryFromJob(job, models = []) {
+  if (!job || job.status !== 'done' || !job.result || !job.result.url) return null;
+  const params = job.params || {};
+  const m = models.find((x) => x.id === params.model);
+  return {
+    id: job.id, kind: job.kind, url: proxyUrl(job.result.url), prompt: params.prompt || '', model: params.model, modelName: (m && m.name) || params.model,
+    device: params.device || '', aspect: params.aspect_ratio || '1:1', seed: job.result.seed,
+    seconds: Math.max(0, Math.round(((job.finishedAt || 0) - (job.startedAt || 0)) / 1000)), createdAt: job.finishedAt || Date.now(),
+  };
+}
+
+/** Add server jobs the browser has not seen yet (oldest first, so the newest ends on top). Returns the SAME list when nothing is new. */
+export function mergeServerJobs(history, jobs, models, dismissed = new Set()) {
+  const seen = new Set(history.map((e) => e.id));
+  const fresh = jobs.map((j) => entryFromJob(j, models)).filter((e) => e && !seen.has(e.id) && !dismissed.has(e.id)).sort((a, b) => a.createdAt - b.createdAt);
+  return fresh.length ? fresh.reduce((list, entry) => pushHistory(list, entry), history) : history;
 }
 
 /** Newest first, capped. */

@@ -87,6 +87,15 @@ export function writeLocalHistory(list) {
   window.dispatchEvent(new Event(HISTORY_EVENT));
 }
 
+const DISMISSED_KEY = "ogai_local_dismissed_v1";
+export function readDismissed() {
+  try { return new Set(JSON.parse(window.localStorage.getItem(DISMISSED_KEY) || "[]")); } catch { return new Set(); }
+}
+/** Remembers an entry the user removed, so syncing with the server's job list does not bring it back. */
+export function dismissLocalEntry(id) {
+  try { const set = readDismissed(); set.add(id); window.localStorage.setItem(DISMISSED_KEY, JSON.stringify([...set].slice(-500))); } catch { /* not persisted */ }
+}
+
 export function useLocalHistory() {
   const [list, setList] = useState([]);
   useEffect(() => {

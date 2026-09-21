@@ -58,7 +58,6 @@ const LOCAL_TOOLS = [
         video_frames: { type: 'integer', description: 'Default 33 (about 2s at 16 fps)' },
         fps: { type: 'integer', description: 'Default 16' },
         steps: { type: 'integer' },
-        fast: { type: 'boolean', description: 'Default true: 4-step lightx2v LoRAs. false = quality mode (10+8 steps, no LoRA; slower)' },
         seed: { type: 'integer' },
         negative_prompt: { type: 'string' },
         device: { type: 'string', enum: ['v100'], description: 'Video models only fit the V100 - pass "v100" explicitly' },

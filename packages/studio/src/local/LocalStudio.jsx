@@ -29,12 +29,13 @@ import {
   explainError,
   formatDuration,
   needsV100,
+  mergeServerJobs,
   pickerModels,
   proxyUrl,
   pushHistory,
   resolveDevice,
 } from "./localLogic.js";
-import { readLocalHistory, useLocalHistory, useLocalStatus, writeLocalHistory } from "./useLocal.js";
+import { dismissLocalEntry, readDismissed, readLocalHistory, useLocalHistory, useLocalStatus, writeLocalHistory } from "./useLocal.js";
 
 const PREFS_KEY = "ogai_local_prefs_v1";
 const VIDEO_SOURCE_KEY = "ogai_local_video_source";
@@ -183,9 +184,9 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState("");
   const [modelId, setModelId] = useState(null);
-  const [aspect, setAspect] = useState("1:1");
+  const [aspect, setAspect] = useState(kind === "video" ? "16:9" : "1:1");
   const [deviceChoice, setDeviceChoice] = useState("auto");
-  const [advanced, setAdvanced] = useState({ steps: "", guidance: "", seed: "", frames: 33, fast: true });
+  const [advanced, setAdvanced] = useState({ steps: "", guidance: "", seed: "", frames: 33 });
   const [source, setSource] = useState(null);          // video: { url, file?, label }
   const [open, setOpen] = useState(null);              // model | aspect | device | advanced | source
   const [active, setActive] = useState(null);          // the running job's tracking info
@@ -293,6 +294,21 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
 
   useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
 
+  // Everything the service finished shows up here too, including jobs made by agents / MCP / another browser.
+  useEffect(() => {
+    if (status.phase !== "online") return undefined;
+    let stopped = false;
+    const sync = () => listJobs().then((jobs) => {
+      if (stopped) return;
+      const current = readLocalHistory();
+      const merged = mergeServerJobs(current, jobs, status.models, readDismissed());
+      if (merged !== current) writeLocalHistory(merged);
+    }).catch(() => {});
+    sync();
+    const timer = setInterval(sync, 10_000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [status.phase, status.models]);
+
   const go = async () => {
     setError(null);
     let imageBase64;
@@ -329,7 +345,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     window.dispatchEvent(new CustomEvent("ogai-local-navigate", { detail: { tab: "video" } }));
   };
 
-  const removeEntry = (entry) => writeLocalHistory(readLocalHistory().filter((e) => e.id !== entry.id));
+  const removeEntry = (entry) => { dismissLocalEntry(entry.id); writeLocalHistory(readLocalHistory().filter((e) => e.id !== entry.id)); };
   const recentImages = useMemo(() => allHistory.filter((e) => e.kind === "image").slice(0, 8), [allHistory]);
   const stop = (e) => e.stopPropagation();
   const toggle = (name) => (e) => { e.stopPropagation(); setOpen((o) => (o === name ? null : name)); };
@@ -379,7 +395,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                   </button>
                 )}
                 {open === "source" && (
-                  <PromptPopover onClick={stop} className="w-[calc(100vw-2rem)] md:w-[360px]">
+                  <PromptPopover solid onClick={stop} className="w-[calc(100vw-2rem)] md:w-[360px]">
                     <PromptPopoverHeader>Starting image</PromptPopoverHeader>
                     <input ref={fileRef} type="file" accept="image/png,image/jpeg" className="hidden" onChange={(e) => {
                       const file = e.target.files && e.target.files[0];
@@ -427,7 +443,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                 <PromptChevronIcon />
               </button>
               {open === "model" && (
-                <PromptPopover onClick={stop} className="w-[calc(100vw-2rem)] md:w-[420px] max-h-[60vh]">
+                <PromptPopover solid onClick={stop} className="w-[calc(100vw-2rem)] md:w-[420px] max-h-[60vh]">
                   <PromptPopoverHeader>Local {kind} models</PromptPopoverHeader>
                   <PromptMenuList>
                     {models.map((m) => (
@@ -449,7 +465,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                 <span className={PROMPT_CONTROL_LABEL_CLASS}>{aspect}</span>
               </button>
               {open === "aspect" && (
-                <PromptPopover onClick={stop}>
+                <PromptPopover solid onClick={stop}>
                   <PromptPopoverHeader>Aspect ratio</PromptPopoverHeader>
                   <PromptMenuList>
                     {aspects.map((a) => <PromptMenuItem key={a} selected={a === aspect} onClick={() => { setAspect(a); savePrefs(kind, { aspect: a }); setOpen(null); }}>{a}</PromptMenuItem>)}
@@ -464,7 +480,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                 <PromptChevronIcon />
               </button>
               {open === "device" && (
-                <PromptPopover onClick={stop} className="w-[calc(100vw-2rem)] md:w-[340px]">
+                <PromptPopover solid onClick={stop} className="w-[calc(100vw-2rem)] md:w-[340px]">
                   <PromptPopoverHeader>GPU</PromptPopoverHeader>
                   <PromptMenuList>
                     {[["auto", "Auto", "GTX 1080 for small models; the V100 only when a model needs it"], ["gtx1080", "GTX 1080", "8 GB · never interrupts Hermes"], ["v100", "Tesla V100", "32 GB · stops the Hermes brain (~5 min) and TTS (~7 min)"]].map(([id, label, desc]) => (
@@ -482,18 +498,11 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></svg>
               </button>
               {open === "advanced" && (
-                <PromptPopover onClick={stop} className="w-[calc(100vw-2rem)] md:w-[320px]">
+                <PromptPopover solid onClick={stop} className="w-[calc(100vw-2rem)] md:w-[320px] !max-h-[60vh]">
                   <PromptPopoverHeader>Advanced</PromptPopoverHeader>
                   <div className="flex flex-col gap-3 px-1">
                     {kind === "video" && (
                       <>
-                        <Field label="Mode">
-                          <div className="flex gap-2 normal-case tracking-normal">
-                            {[[true, "Fast (4-step LoRA)"], [false, "Quality (18 steps)"]].map(([v, label]) => (
-                              <button key={String(v)} type="button" onClick={() => setAdvanced((a) => ({ ...a, fast: v }))} className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-semibold border ${advanced.fast === v ? "border-[#22d3ee]/50 text-[#22d3ee] bg-[#22d3ee]/10" : "border-white/10 text-white/50"}`}>{label}</button>
-                            ))}
-                          </div>
-                        </Field>
                         <Field label="Frames">
                           <div className="flex gap-2 normal-case tracking-normal">
                             {FRAME_CHOICES.map((f) => (

@@ -15,7 +15,6 @@ const QWEN_FILES = { diffusion: '/m/qwen-image-2512-Q6_K.gguf', vae: '/m/qwen_im
 const WAN_FILES = {
   diffusion: '/m/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: '/m/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf',
   vae: '/m/Wan2_1_VAE_bf16.safetensors', t5xxl: '/m/umt5_xxl_fp8_e4m3fn_scaled.safetensors',
-  lora_low: '/l/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors', lora_high: '/l/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors',
 };
 
 test('specs exist for exactly the three catalog ids we serve, with the right kind and output type', () => {
@@ -45,12 +44,10 @@ test('resolveFiles reports every missing basename and an unreadable/absent dir i
   assert.deepEqual(missing.sort(), ['clip_l.safetensors', 'flux1-dev-Q8_0.gguf', 't5xxl_fp16.safetensors']);
 });
 
-test('LoRA files are only required for the fast (LoRA) Wan mode', () => {
+test('Wan needs exactly the four model files and no LoRAs (the lightx2v LoRAs crash sd.cpp with these GGUFs)', () => {
   const a = tmp();
-  for (const f of ['Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf', 'Wan2_1_VAE_bf16.safetensors', 'umt5_xxl_fp8_e4m3fn_scaled.safetensors']) touch(a, `m/${f}`);
   const spec = getSpec('wan2gp:wan22-i2v');
-  assert.equal(resolveFiles(spec, [a], { fast: false }).missing.length, 0);
-  assert.deepEqual(resolveFiles(spec, [a], {}).missing.sort(), ['wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors', 'wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors']);
+  assert.deepEqual(resolveFiles(spec, [a], {}).missing.sort(), ['Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf', 'Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', 'Wan2_1_VAE_bf16.safetensors', 'umt5_xxl_fp8_e4m3fn_scaled.safetensors']);
 });
 
 test('prepare fills defaults, keeps overrides, and picks a positive random seed when none/-1', () => {
@@ -84,7 +81,7 @@ test('Qwen-Image args follow sd.cpp docs: llm text encoder, cfg 2.5, flow shift 
   assert.ok(pair(args, '--cfg-scale', 2.5)); assert.ok(pair(args, '--flow-shift', 3)); assert.ok(args.includes('--diffusion-fa'));
 });
 
-test('Wan 2.2 I2V fast mode: both experts, LoRA tags for low AND high noise, 4+4 steps, cfg 1, 33 frames, avi, init image', () => {
+test('Wan 2.2 I2V: both experts, sd.cpp quality recipe (10+8 steps, cfg 3.5 both stages), 33 frames, avi, init image, no LoRA', () => {
   const spec = getSpec('wan2gp:wan22-i2v');
   const params = prepare(spec, { prompt: 'the apple slowly rotates', init_image: '/tmp/init.png' });
   const args = buildArgs(spec, params, WAN_FILES, '/tmp/v.avi');
@@ -93,25 +90,19 @@ test('Wan 2.2 I2V fast mode: both experts, LoRA tags for low AND high noise, 4+4
   assert.ok(pair(args, '--high-noise-diffusion-model', WAN_FILES.high_noise));
   assert.ok(pair(args, '--vae', WAN_FILES.vae)); assert.ok(pair(args, '--t5xxl', WAN_FILES.t5xxl));
   assert.ok(pair(args, '-i', '/tmp/init.png')); assert.ok(pair(args, '-o', '/tmp/v.avi'));
-  assert.ok(pair(args, '--lora-model-dir', '/l'));
-  const prompt = args[args.indexOf('-p') + 1];
-  assert.ok(prompt.startsWith('the apple slowly rotates'));
-  assert.ok(prompt.includes('<lora:wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise:1>'));
-  assert.ok(prompt.includes('<lora:|high_noise|wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise:1>'));
-  assert.ok(pair(args, '--steps', 4)); assert.ok(pair(args, '--high-noise-steps', 4));
-  assert.ok(pair(args, '--cfg-scale', 1)); assert.ok(pair(args, '--high-noise-cfg-scale', 1));
+  assert.equal(args[args.indexOf('-p') + 1], 'the apple slowly rotates');
+  assert.equal(args.includes('--lora-model-dir'), false);
+  assert.ok(pair(args, '--steps', 10)); assert.ok(pair(args, '--high-noise-steps', 8));
+  assert.ok(pair(args, '--cfg-scale', 3.5)); assert.ok(pair(args, '--high-noise-cfg-scale', 3.5));
   assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--flow-shift', 3));
   assert.ok(pair(args, '-W', 640)); assert.ok(pair(args, '-H', 368)); assert.ok(args.includes('--offload-to-cpu')); assert.ok(pair(args, '-n', NEG_WAN));
   assert.ok(args.includes('--diffusion-fa'));
 });
 
-test('Wan 2.2 I2V quality mode (fast:false): no LoRA, 10+8 steps, cfg 3.5 both stages', () => {
+test('Wan fast mode (lightx2v LoRAs) is refused up front with a reason: sd.cpp aborts loading those LoRAs against these GGUFs (measured in every apply mode)', () => {
   const spec = getSpec('wan2gp:wan22-i2v');
-  const args = buildArgs(spec, prepare(spec, { prompt: 'x', init_image: '/tmp/i.png', fast: false }), WAN_FILES, '/tmp/v.avi');
-  assert.equal(args.includes('--lora-model-dir'), false);
-  assert.equal(args[args.indexOf('-p') + 1].includes('<lora:'), false);
-  assert.ok(pair(args, '--steps', 10)); assert.ok(pair(args, '--high-noise-steps', 8));
-  assert.ok(pair(args, '--cfg-scale', 3.5)); assert.ok(pair(args, '--high-noise-cfg-scale', 3.5));
+  assert.throws(() => prepare(spec, { prompt: 'x', init_image: '/i.png', fast: true }), (e) => e.code === 'FAST_UNAVAILABLE' && /LoRA/.test(e.message));
+  assert.doesNotThrow(() => prepare(spec, { prompt: 'x', init_image: '/i.png', fast: false }));
 });
 
 test('Wan 2.2 I2V needs an init image; explicit size/frames/fps overrides are honoured', () => {

@@ -131,8 +131,7 @@ function modelDir(files) {
   return d;
 }
 const FLUX_FILES = ['flux1-dev-Q8_0.gguf', 'ae.sft.safetensors', 'clip_l.safetensors', 't5xxl_fp16.safetensors'];
-const WAN_FILES = ['Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf', 'Wan2_1_VAE_bf16.safetensors', 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
-  'wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors', 'wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors'];
+const WAN_FILES = ['Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf', 'Wan2_1_VAE_bf16.safetensors', 'umt5_xxl_fp8_e4m3fn_scaled.safetensors'];
 function fakeSdcli(bytes = 'BYTES') {
   const calls = [];
   const fn = async (opts) => {

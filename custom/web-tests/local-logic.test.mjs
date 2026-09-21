@@ -45,8 +45,8 @@ test('buildParams sends only what the user set; video adds frames/fps/fast/image
   assert.deepEqual(buildParams({ model: flux, prompt: '  a cat ', aspect: '1:1', device: 'v100' }), { model: 'wan2gp:flux-dev', prompt: 'a cat', aspect_ratio: '1:1', device: 'v100' });
   const p = buildParams({ model: flux, prompt: 'x', negative: ' blurry ', aspect: '16:9', device: 'v100', advanced: { steps: '12', guidance: '3.5', seed: '42', frames: '17' } });
   assert.deepEqual([p.negative_prompt, p.steps, p.guidance_scale, p.seed, p.video_frames], ['blurry', 12, 3.5, 42, undefined]);
-  const v = buildParams({ model: wan, prompt: 'moves', aspect: '16:9', device: 'v100', advanced: { frames: '17', fps: '8', fast: false, seed: '' }, imageBase64: 'AAAA' });
-  assert.deepEqual([v.video_frames, v.fps, v.fast, v.image_base64, v.seed], [17, 8, false, 'AAAA', undefined]);
+  const v = buildParams({ model: wan, prompt: 'moves', aspect: '16:9', device: 'v100', advanced: { frames: '17', fps: '8', seed: '' }, imageBase64: 'AAAA' });
+  assert.deepEqual([v.video_frames, v.fps, v.fast, v.image_base64, v.seed], [17, 8, undefined, 'AAAA', undefined]);   // no fast/quality switch: quality is the only mode
 });
 
 test('describeJob: queued, arbiter wait on the V100, model load, sampling, decode', () => {
