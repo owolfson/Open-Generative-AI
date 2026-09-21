@@ -92,6 +92,43 @@ for bad, why in [({'width': 1280, 'height': 720}, '720p'), ({'video_frames': 145
         check(f'LTX limit enforced before any lease: {why}', jj['status'] == 'error' and jj['error']['code'] == 'LTX_LIMIT', jj.get('error'))
     else: check(f'LTX limit enforced: {why}', st == 400, (st, b[:100]))
 
+print('== hardening (limits, numbers, prompt cap, queue cap)')
+def job_outcome(body, secs=20):
+    st, b, _ = submit(body)
+    if st != 202: return st, js(b), None
+    jid = js(b)['job']['id']
+    for _ in range(int(secs * 2)):
+        jj = js(call(S, 'GET', f'/api/local/jobs/{jid}')[1])['job']
+        if jj['status'] in ('error', 'done', 'cancelled'): return st, js(b), jj
+        time.sleep(0.5)
+    return st, js(b), jj
+for label, body, code in [
+    ('Wan T2V at 832x480 (measured OOM)', {'model': 'wan2gp:wan22-t2v', 'prompt': 'x', 'device': 'v100', 'width': 832, 'height': 480}, 'PARAM_LIMIT'),
+    ('Wan T2V 200 frames', {'model': 'wan2gp:wan22-t2v', 'prompt': 'x', 'device': 'v100', 'video_frames': 200}, 'PARAM_LIMIT'),
+    ('Flux 4096x4096', {'model': 'wan2gp:flux-dev', 'prompt': 'x', 'device': 'v100', 'width': 4096, 'height': 4096}, 'PARAM_LIMIT'),
+    ('Flux 100000 steps', {'model': 'wan2gp:flux-dev', 'prompt': 'x', 'device': 'v100', 'steps': 100000}, 'PARAM_LIMIT'),
+    ('Hunyuan 720p', {'model': 'wan2gp:hunyuan-video', 'prompt': 'x', 'device': 'v100', 'width': 1280, 'height': 720}, 'PARAM_LIMIT'),
+    ('steps="abc"', {'model': 'wan2gp:flux-dev', 'prompt': 'x', 'device': 'v100', 'steps': 'abc'}, 'PARAM_INVALID'),
+    ('negative width', {'model': 'wan2gp:flux-dev', 'prompt': 'x', 'device': 'v100', 'width': -512}, 'PARAM_INVALID'),
+    ('cfg_scale 999', {'model': 'wan2gp:flux-dev', 'prompt': 'x', 'device': 'v100', 'cfg_scale': 999}, 'PARAM_INVALID'),
+]:
+    st, sub, jj = job_outcome(body)
+    check(f'{label} -> {code} before any lease', jj is not None and jj['status'] == 'error' and jj['error']['code'] == code, jj and jj.get('error'))
+st, b, _ = submit({'model': 'dreamshaper-8', 'prompt': 'x' * 8001}); check('prompt over 8000 chars -> 400', st == 400, (st, b[:100]))
+st, b, _ = submit({'model': 'dreamshaper-8', 'prompt': 'ok', 'negative_prompt': 'x' * 8001}); check('negative_prompt over 8000 chars -> 400', st == 400, (st, b[:100]))
+if A.gpu1080:
+    ids, codes = [], []
+    for i in range(40):
+        st, b, _ = submit({'model': 'dreamshaper-8', 'prompt': f'flood {i}', 'device': 'gtx1080'}); codes.append(st)
+        if st == 202: ids.append(js(b)['job']['id'])
+    check('queue flood: 40 submissions -> at most 26 accepted (1 running + 25 waiting), the rest 429', codes.count(202) <= 26 and codes.count(429) >= 14, (codes.count(202), codes.count(429)))
+    for i in ids: call(S, 'POST', f'/api/local/jobs/{i}/cancel', {})
+    time.sleep(4)
+    left = [j for j in js(call(S, 'GET', '/api/local/jobs')[1])['jobs'] if j['status'] in ('queued', 'running')]
+    check('every flooded job cancelled cleanly (nothing left running or queued)', not left, len(left))
+    import subprocess as _sp
+    check('no sd-cli left after cancelling the flood', not _sp.run(['pgrep', '-x', 'sd-cli'], capture_output=True, text=True).stdout.split())
+
 print('== MCP')
 def rpc(method, params=None, i=1): return js(call(S, 'POST', '/mcp', {'jsonrpc': '2.0', 'id': i, 'method': method, **({'params': params} if params is not None else {})})[1]) or {}
 tools = {t['name'] for t in rpc('tools/list').get('result', {}).get('tools', [])}

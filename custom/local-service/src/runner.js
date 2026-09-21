@@ -209,7 +209,7 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     try {
       return await fn({ ...ctx, signal: controller.signal });
     } catch (err) {
-      if (timedOut && !ctx.signal.aborted) throw codeError('JOB_TIMEOUT', `the job exceeded its ${Math.round(limitMs / 60000)} minute limit and was stopped`);
+      if (timedOut && !ctx.signal.aborted) throw codeError('JOB_TIMEOUT', `the job exceeded its ${limitMs >= 120000 ? `${Math.round(limitMs / 60000)} minute` : `${Math.round(limitMs / 1000)} second`} limit and was stopped`);
       throw err;
     } finally {
       clearTimeout(timer);
