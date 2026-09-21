@@ -8,7 +8,7 @@ const { createRunner } = require('../src/runner');
 
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('PNG!').toString('base64')}`;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-runner-'));
-const config = (over = {}) => ({ gpuEnabled: true, allowedDevices: ['v100', 'gtx1080'], arbiterUrl: 'http://arb', outputsDir: tmp(), sdcppConsumer: 'ogai-local', sdcppVramGb: 10, deviceIndexV100: 0, deviceIndex1080: 1, dataDir: tmp(), tmpDir: tmp(), sdcliPath: '/opt/sd-cli', modelDirs: [], ...over });
+const config = (over = {}) => ({ leaseLingerMs: 0, gpuEnabled: true, allowedDevices: ['v100', 'gtx1080'], arbiterUrl: 'http://arb', outputsDir: tmp(), sdcppConsumer: 'ogai-local', sdcppVramGb: 10, deviceIndexV100: 0, deviceIndex1080: 1, dataDir: tmp(), tmpDir: tmp(), sdcliPath: '/opt/sd-cli', modelDirs: [], ...over });
 const job = (over = {}) => ({ id: 'job1', route: 'sdcpp', params: { model: 'z-image-turbo', prompt: 'a cat' }, ...over });
 const ctx = () => ({ signal: new AbortController().signal });
 const quiet = { warn() {}, error() {} };
@@ -241,7 +241,7 @@ test('a non-V100 job in the middle ends the batch: the lease is released before 
   assert.deepEqual([a, mid, c].map((j) => queue.get(j.id).status), ['done', 'done', 'done']);
 });
 
-test('a failed job releases the lease; the next queued job then acquires its own', async () => {
+test('a failed job keeps the lease when the next queued job is covered (the arbiter restores the brain the instant a lease is released: releasing here would start a cold load that the next job then kills)', async () => {
   let n = 0;
   const failFirst = async (opts) => { n += 1; if (n === 1) throw Object.assign(new Error('sd-cli exploded'), { code: 'SDCLI_FAILED' }); return fakeSdcli()(opts); };
   const { queue, gate } = batchSetup({ sdcli: failFirst });
@@ -249,8 +249,16 @@ test('a failed job releases the lease; the next queued job then acquires its own
   await done(queue, a, b);
   assert.equal(queue.get(a.id).status, 'error');
   assert.equal(queue.get(b.id).status, 'done');
-  assert.equal(gate.calls.length, 2);
-  assert.equal(gate.releases, 2);
+  assert.equal(gate.calls.length, 1, 'one lease covers the failed job and the one behind it');
+  assert.equal(gate.releases, 1, 'released once, after the last job');
+});
+
+test('a failed job with NOTHING behind it releases the lease (no linger configured)', async () => {
+  const boom = async () => { throw Object.assign(new Error('sd-cli exploded'), { code: 'SDCLI_FAILED' }); };
+  const { queue, gate } = batchSetup({ sdcli: boom });
+  const a = submit(queue, fluxJob());
+  await done(queue, a);
+  assert.equal(queue.get(a.id).status, 'error'); assert.equal(gate.releases, 1);
 });
 
 test('a covered job that fails BEFORE the lease (missing files) must not leak the lease', async () => {
@@ -399,4 +407,31 @@ test('the timeout does not fire for a job that finishes in time, and a user canc
   const p = r2.run(job({ id: 'job2', params: fluxJob() }), { signal: controller.signal });
   setTimeout(() => controller.abort(), 30);
   await assert.rejects(() => p, { code: 'CANCELLED' });
+});
+
+// ---------- linger: a quick follow-up must not pay a full evict/restore cycle ----------
+test('with leaseLingerMs the lease is held after the queue empties, so a follow-up job reuses it; then it is released', async () => {
+  const { standin, gate } = fakes();
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], leaseLingerMs: 120 });
+  const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: fakeSdcli(), log: quiet });
+  await r.run(job({ id: 'j1', params: fluxJob() }), ctx());
+  assert.equal(gate.releases, 0, 'still held right after the job');
+  await r.run(job({ id: 'j2', params: fluxJob() }), ctx());          // arrives within the linger window
+  assert.equal(gate.calls.length, 1, 'the follow-up reused the lease (no second evict/restore cycle)');
+  await new Promise((res) => setTimeout(res, 300));
+  assert.equal(gate.releases, 1, 'released once the linger window passed with no new work');
+});
+
+test('a GTX 1080 job (or shutdown) during the linger window gives the V100 back immediately', async () => {
+  const { standin, gate } = fakes();
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], leaseLingerMs: 60_000 });
+  const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: fakeSdcli(), log: quiet });
+  await r.run(job({ id: 'j1', params: fluxJob() }), ctx());
+  assert.equal(gate.releases, 0);
+  await r.run(job({ id: 'j2', params: { model: 'z-image-turbo', prompt: 'x', device: 'gtx1080' } }), ctx());
+  assert.equal(gate.releases, 1, 'a job that does not need the V100 releases it');
+  await r.run(job({ id: 'j3', params: fluxJob() }), ctx());
+  assert.equal(gate.releases, 1);
+  await r.shutdown();
+  assert.equal(gate.releases, 2, 'shutdown cancels the linger timer and releases');
 });

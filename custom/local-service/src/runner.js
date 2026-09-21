@@ -60,6 +60,7 @@ const LEASE_MAX_VRAM_GB = 28;   // the arbiter's SAFE_VRAM_BUDGET: a spec's real
  * short grace so a submit racing the end of a job can still join), or the service shuts down.
  */
 function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, mp4Impl = toMp4, log = console, idleReleaseMs = 10_000 }) {
+  const lingerMs = config.leaseLingerMs === undefined ? 30_000 : config.leaseLingerMs;
   const parseChunk = loadProgressParser(config.upstreamDir || '');
   const emitProgress = (data) => { if (standin.events && standin.events.emit) standin.events.emit('send', 'local-ai:progress', data); };
 
@@ -127,17 +128,28 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     held = { lease, vramGb, deadline: Date.now() + seconds * 1000, idleTimer: null };
   }
 
-  /** After a job: keep the lease only when the very next queued job is covered by it; otherwise give the V100 back now. */
-  async function settle(succeeded, pending) {
+  const armTimer = (ms) => {
+    held.idleTimer = setTimeout(() => { dropLease().catch((err) => log.error(`runner: idle lease release failed: ${err.message}`)); }, ms);
+    if (held.idleTimer.unref) held.idleTimer.unref();
+  };
+
+  /**
+   * After a job (success OR failure - sd-cli's exit frees its VRAM either way):
+   * - the next queued job is covered by this lease -> keep it (safety timer in case that job never starts);
+   * - a next job is queued but not covered (a 1080 job, or a bigger one) -> give the card back now;
+   * - nothing queued -> linger briefly. The arbiter restores the brain the instant a lease is released, so a follow-up submitted seconds
+   *   later would otherwise interrupt that cold load and pay a whole evict/restore cycle. leaseLingerMs=0 releases immediately.
+   */
+  async function settle(pending) {
     if (!held) return;
-    const next = succeeded ? pending[0] : null;
-    const need = next && needOf(next);
-    if (need && covers(need)) {
-      // Safety net: if that next job never starts (cancelled in the gap), do not sit on the V100 until the arbiter's expiry.
-      held.idleTimer = setTimeout(() => { dropLease().catch((err) => log.error(`runner: idle lease release failed: ${err.message}`)); }, idleReleaseMs);
-      if (held.idleTimer.unref) held.idleTimer.unref();
+    const next = pending[0];
+    if (next) {
+      const need = needOf(next);
+      if (need && covers(need)) { armTimer(idleReleaseMs); return; }
+      await dropLease();
       return;
     }
+    if (lingerMs > 0) { armTimer(lingerMs); return; }
     await dropLease();
   }
 
@@ -220,16 +232,14 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
   async function run(job, ctx) {
     if (held) clearTimeout(held.idleTimer);
     const pending = () => (ctx.pending ? ctx.pending() : []);
-    let succeeded = false;
     try {
       const d = describe(job);
       if (d.onGtx1080) await dropLease();                       // a held lease is never needed for the 1080; do not sit on the V100
       else await ensureLease(job, d.need, pending());
       const result = await withTimeLimit(ctx, (limited) => (d.spec ? runExtended(job, limited, d) : runUpstream(job, limited, d)));
-      succeeded = true;
       return result;
     } finally {
-      await settle(succeeded, pending());
+      await settle(pending());
     }
   }
 
