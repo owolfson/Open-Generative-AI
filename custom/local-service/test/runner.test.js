@@ -486,7 +486,7 @@ test('BATTLE-FOUND BUG: a queued V100 job that does not fit the remaining window
   assert.equal(g.events.filter((e) => e.startsWith('release')).length, 0, 'the lease is still held after j1: nothing was released');
   await new Promise((res) => setTimeout(res, 15));   // time must pass, or 'fits the remaining window' is true in the same millisecond
   await r.run(job({ id: 'j2', params: fluxJob() }), ctx());
-  assert.deepEqual(g.events.map((e) => e.replace(/\(lease-\d+\)|\(\d+\)/, '')), ['acquire#1', 'acquire#2', 'release'], 'j2 renewed by handover: the replacement was requested before the old lease was released');
+  assert.deepEqual(g.events.map((e) => e.replace(/\(lease-\d+\)|\(\d+\)/, '')), ['acquire#1', 'acquire#2', 'release', 'release'], 'j2 renewed by handover: acquire #2 went out BEFORE the first release; the last release is j2\'s own lease at the end');
   await r.shutdown();
 });
 
