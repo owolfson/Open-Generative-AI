@@ -72,6 +72,26 @@
 - **Known unknown for Task 7:** the on-disk Qwen2.5-VL and UMT5 text encoders are ComfyUI `fp8_scaled` (`*.scale_weight` / `*.scale_input` tensors). sd.cpp renames `.scale_weight` -> `.weight_scale` and applies it in its Linear block, so they MAY load; unproven. If a job dies loading them, fetch GGUF/fp16 encoders (sd.cpp docs use `Qwen2.5-VL-7B-Instruct-Q8_0.gguf` and `umt5-xxl-encoder-Q8_0.gguf`) rather than debugging fp8.
 - **Task 7 (supervised V100 batch) NOT run** - waits for Owen's go-ahead (brain + TTS go down ~10 min).
 
+## Results, part 2 - supervised V100 runs (2026-09-20 evening) and GUI
+
+Runs went through the runner + gpu-arbiter with a watcher (arbiter events, brain/TTS state, V100 + host RAM every 3s) and abort rules
+(V100 > 30GB, host RAM < 3GB, job > 20 min, arbiter refusal). Every cycle restored the brain (~5-6 min) and TTS cleanly.
+
+| Model | Result | Measured |
+|---|---|---|
+| Flux.1 Dev | PROVEN | 1024x1024, 20 steps: 160s total (~100s model load, ~1.6s/step); peak 28.8GB (22.8GB sampling + ~6GB VAE decode); quality good, slight mosaic grain in dark areas |
+| Qwen-Image 2512 | PROVEN | 1024x1024, 20 steps: 187s (~100s load, ~3s/step); peak 24.5GB WITH `--vae-tiling` (31.9GB without: the >30GB abort rule fired, correctly); excellent, no black image; the fp8-scaled Qwen2.5-VL encoder loads |
+| Wan 2.2 I2V | quality mode proven (by Gemini, job f8e6a6da, 640x368/33 frames, `--offload-to-cpu`); **NOT reproducible under normal host load** | see below |
+
+Findings (each one changed the code):
+- **Lease sizing**: the lease was sized for the first job only (Flux 22GB/900s); Qwen (24GB) submitted moments later could not share it. Now a V100 lease claims the whole card (min(max spec VRAM, 28GB arbiter budget)) for >= 1h, and `covers()` compares capped claims.
+- **`--vae-tiling`** added to all three models (Qwen decode 31.9GB -> 24.5GB).
+- **Wan "fast" mode (lightx2v LoRAs) is impossible here**: sd-cli aborts while loading the LoRAs in every `--lora-apply-mode` (`gguf_init_from_reader: tensor 'patch_embedding.weight' has invalid number of dimensions: 5 > 4`), reproduced CPU-only in seconds. Fast mode removed; `fast:true` fails up front (`FAST_UNAVAILABLE`).
+- **Wan `--offload-to-cpu` is not viable on this host**: 25GB of weights become ~23.5GB of shmem in sd-cli; with the other containers (~24GB) `MemAvailable` fell to 2.4GB and the kernel OOM killer took sd-cli (job died after both sampling stages, while streaming weights back). The 3GB RAM guard is what kept this from being worse.
+- **Wan without offload** (weights on the V100) samples fine but the VAE decode needs ~31.5GB peak (fails "wan_vae ... weight preparation") even with `--vae-tiling`.
+- Next candidates (lean host RAM): `--temporal-tiling`, `--backend te=cpu` (T5 on the CPU, ~6.4GB RAM), see Results part 3 when run.
+- Web GUI (Image + Video studios, Settings -> Local models, header chip, local-only sign-in): verified in a real browser; a Z-Image render on the GTX 1080 was driven end-to-end from the GUI (2m24s) and viewed in the GUI.
+
 ## Self-Review
 
 - Covers: Flux/Qwen/Wan via sd.cpp (T1-T3), the I2V input path and MCP tool (T4), the downtime cost lesson (T5), deploy (T6), evidence with abort rules (T7).
