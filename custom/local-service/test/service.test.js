@@ -51,7 +51,7 @@ test('catalogPayload tells agents which extended models are runnable right now (
   const svc = createService({ standin, queue: new JobQueue({ run: async () => ({}) }), config: { modelDirs: [dir] } });
   const byId = Object.fromEntries((await svc.catalogPayload()).models.map((m) => [m.id, m]));
   assert.equal(byId['wan2gp:flux-dev'].filesPresent, true);
-  assert.equal(byId['wan2gp:flux-dev'].vramGb, 22);
+  assert.equal(byId['wan2gp:flux-dev'].vramGb, 29);   // measured peak on the V100
   assert.equal(byId['wan2gp:qwen-image'].filesPresent, false);
   assert.equal(byId['wan2gp:wan22-i2v'].filesPresent, false);
   assert.equal(byId['wan2gp:hunyuan-video'].filesPresent, undefined, 'models with no engine are not judged');

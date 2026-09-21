@@ -13,7 +13,7 @@ const codeError = (code, message) => Object.assign(new Error(message), { code })
 
 const SPECS = {
   'wan2gp:flux-dev': {
-    id: 'wan2gp:flux-dev', kind: 'image', ext: 'png', vramGb: 22,
+    id: 'wan2gp:flux-dev', kind: 'image', ext: 'png', vramGb: 29,   // measured peak 28.8GB (1024x1024: 22.8GB while sampling, +6GB in the VAE decode)
     files: { diffusion: 'flux1-dev-Q8_0.gguf', vae: 'ae.sft.safetensors', clip_l: 'clip_l.safetensors', t5xxl: 't5xxl_fp16.safetensors' },
     defaults: () => ({ width: 1024, height: 1024, steps: 20, cfg_scale: 1 }),
     // No --clip-on-cpu: this host has no F16C, so fp16 text encoding on the CPU is very slow. The V100 has room for T5 on the GPU.

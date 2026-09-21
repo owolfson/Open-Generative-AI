@@ -35,7 +35,7 @@ test('routes: everything we can serve goes through sd.cpp; only models without w
 
 test('evidence: only models actually run on this box are proven, and provenOn says on which GPU', () => {
   const proven = Object.fromEntries(catalog.staticCatalog().filter((m) => m.evidence === 'proven').map((m) => [m.id, m.provenOn]));
-  assert.deepEqual(proven, { 'dreamshaper-8': ['gtx1080'], 'z-image-turbo': ['gtx1080'], 'wan2gp:wan22-i2v': ['v100'] });   // Wan I2V: job f8e6a6da on the V100; Qwen was proven under ComfyUI, not under this engine; Flux/Qwen here are still untested
+  assert.deepEqual(proven, { 'dreamshaper-8': ['gtx1080'], 'z-image-turbo': ['gtx1080'], 'wan2gp:wan22-i2v': ['v100'], 'wan2gp:flux-dev': ['v100'] });   // Wan I2V: job f8e6a6da on the V100; Qwen was proven under ComfyUI, not under this engine; Flux/Qwen here are still untested
   for (const m of catalog.staticCatalog().filter((e) => e.evidence === 'untested')) assert.deepEqual(m.provenOn, [], m.id);
 });
 

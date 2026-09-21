@@ -44,7 +44,7 @@ test('V100 job: takes an arbiter lease, pins CUDA device 0, persists the PNG', a
   const cfg = config();
   const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, log: quiet });
   const out = await r.run(job({ params: { model: 'z-image-turbo', prompt: 'a cat', device: 'v100' } }), ctx());
-  assert.deepEqual(gate.calls, [{ consumer: 'ogai-local', vramGb: 10, estSeconds: 900, note: 'ogai-local job job1' }]);
+  assert.deepEqual(gate.calls, [{ consumer: 'ogai-local', vramGb: 28, estSeconds: 3600, note: 'ogai-local job job1' }]);   // whole-card lease: capped at the arbiter's 28GB budget, 1h window
   assert.equal(standin.envAtGenerate, '0');
   assert.equal(out.seed, 7);
   assert.equal(out.file, 'job1.png');
@@ -152,9 +152,9 @@ test('Flux on the V100: leases the model\'s own VRAM, runs sd-cli with the right
   const cfg = config({ modelDirs: [modelDir(FLUX_FILES)] });
   const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: sd, log: quiet });
   const out = await r.run(job({ params: { model: 'wan2gp:flux-dev', prompt: 'a cat', device: 'v100', seed: 5 } }), ctx());
-  assert.equal(gate.calls[0].vramGb, 22);
+  assert.equal(gate.calls[0].vramGb, 28);   // the lease claims the whole card (capped at the arbiter's 28GB budget), not just this model's footprint
   assert.equal(gate.calls[0].consumer, 'ogai-local');
-  assert.equal(gate.calls[0].estSeconds, 900);
+  assert.equal(gate.calls[0].estSeconds, 3600);
   const call = sd.calls[0];
   assert.equal(call.binary, cfg.sdcliPath);
   assert.ok(call.args.includes('--t5xxl'));
@@ -180,8 +180,8 @@ test('video model: avi artifact with kind video, a longer lease estimate, and no
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
   const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: sd, log: quiet });
   const out = await r.run(job({ params: { model: 'wan2gp:wan22-i2v', prompt: 'it moves', device: 'v100', init_image: '/tmp/in.png', seed: 9 } }), ctx());
-  assert.equal(gate.calls[0].vramGb, 27);
-  assert.equal(gate.calls[0].estSeconds, 1800);
+  assert.equal(gate.calls[0].vramGb, 28);
+  assert.equal(gate.calls[0].estSeconds, 3600);
   assert.ok(sd.calls[0].args.includes('vid_gen'));
   assert.deepEqual({ file: out.file, url: out.url, kind: out.kind, mime: out.mime, seed: out.seed }, { file: 'job1.avi', url: '/outputs/job1.avi', kind: 'video', mime: 'video/x-msvideo', seed: 9 });
   assert.equal(out.dataUrl, undefined);
@@ -205,10 +205,11 @@ test('sd-cli progress is forwarded as local-ai:progress events', async () => {
 
 // ---------- one V100 lease across a queued batch ----------
 const { JobQueue } = require('../src/queue');
-function batchSetup({ sdcli } = {}) {
+function batchSetup({ sdcli, qwen = false } = {}) {
   const { standin, gate } = fakes();
   const sd = sdcli || fakeSdcli();
-  const cfg = config({ modelDirs: [modelDir([...FLUX_FILES, 'qwen_image_vae.safetensors'])] });
+  const QWEN_ALL = ['qwen_image_vae.safetensors', 'qwen-image-2512-Q6_K.gguf', 'qwen_2.5_vl_7b_fp8_scaled.safetensors'];
+  const cfg = config({ modelDirs: [modelDir([...FLUX_FILES, ...(qwen ? QWEN_ALL : ['qwen_image_vae.safetensors'])])] });
   const runner = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: sd, log: quiet });
   const queue = new JobQueue({ run: (j, c) => runner.run(j, c) });
   return { queue, gate, sd, runner, standin };
@@ -225,8 +226,8 @@ test('two queued V100 jobs share ONE lease sized for the whole batch (the brain 
   assert.equal(queue.get(a.id).status, 'done'); assert.equal(queue.get(b.id).status, 'done');
   assert.equal(gate.calls.length, 1);
   assert.equal(gate.releases, 1);
-  assert.equal(gate.calls[0].estSeconds, 1800);     // 900 + 900
-  assert.equal(gate.calls[0].vramGb, 22);
+  assert.equal(gate.calls[0].estSeconds, 3600);     // never less than the 1h window, so later arrivals can join
+  assert.equal(gate.calls[0].vramGb, 28);           // a V100 lease claims the whole card
   assert.match(gate.calls[0].note, /\(\+1 queued\)/);
 });
 
@@ -337,4 +338,19 @@ test('if the mp4 conversion fails the job still succeeds with the avi, and says 
   assert.equal(out.file, 'job1.avi'); assert.equal(out.mime, 'video/x-msvideo');
   assert.match(out.warning, /mp4 conversion failed.*ffmpeg exploded/);
   assert.equal(warnings.length, 1);
+});
+
+test('a lease claims the biggest V100 model footprint even for a small job, so a BIGGER job that arrives later still shares it', async () => {
+  // This is the real-world order: the first job starts before the others are even submitted.
+  const hold = deferredPromise();
+  const slow = async (opts) => { await hold.promise; return fakeSdcli()(opts); };
+  const { queue, gate } = batchSetup({ qwen: true, sdcli: slow });
+  const a = submit(queue, fluxJob());                                    // 22GB job starts alone and is still running...
+  await new Promise((r) => setTimeout(r, 30));
+  const b = submit(queue, { model: 'wan2gp:qwen-image', prompt: 'x', device: 'v100' });   // ...when a 24GB job arrives
+  hold.resolve();
+  await done(queue, a, b);
+  assert.equal(gate.calls[0].vramGb, 28);
+  assert.equal(gate.calls.length, 1, 'one lease covers both');
+  assert.equal(gate.releases, 1);
 });

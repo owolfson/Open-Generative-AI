@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { acquireLease, codeError, MAX_EST_SECONDS } = require('./gate');
 const { assess } = require('./catalog');
-const { getSpec, resolveFiles, prepare, buildArgs } = require('./sdcpp-models');
+const { SPECS, getSpec, resolveFiles, prepare, buildArgs } = require('./sdcpp-models');
 const { runSdCli } = require('./sdcpp');
 const { toMp4 } = require('./video');
 
@@ -39,6 +39,12 @@ function loadProgressParser(upstreamDir) {
 
 const EST_IMAGE_SECONDS = 900;
 const EST_VIDEO_SECONDS = 1800;
+// A V100 lease is a WHOLE-CARD lease (any grant evicts the Hermes brain and the TTS), so the VRAM it declares is just accounting:
+// always claim the biggest model's footprint, so a bigger job that arrives after a smaller one started can still share the lease.
+// The window is never shorter than an hour for the same reason (the arbiter force-releases at 2x est_seconds; jobs are not
+// started on a lease that would not outlast them, see covers()).
+const LEASE_MIN_SECONDS = 3600;
+const LEASE_MAX_VRAM_GB = 28;   // the arbiter's SAFE_VRAM_BUDGET: a spec's real peak may exceed it (Flux 28.8GB), the lease claim may not
 
 /**
  * Executes one queued job on one of two paths, both through the same sd-cli binary:
@@ -66,7 +72,8 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     await h.lease.release();
   }
 
-  const covers = (need) => Boolean(held) && need.vramGb <= held.vramGb && Date.now() + need.estSeconds * 1000 <= held.deadline;
+  // The lease is whole-card, so what matters is time; VRAM is compared as claimed (capped), never as a model's real peak.
+  const covers = (need) => Boolean(held) && Math.min(need.vramGb, LEASE_MAX_VRAM_GB) <= held.vramGb && Date.now() + need.estSeconds * 1000 <= held.deadline;
 
   /** Everything decided about a job before any GPU work; throws the job's real error (config, device, missing files). */
   function describe(job) {
@@ -105,8 +112,9 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
       if (!n || seconds + n.estSeconds > MAX_EST_SECONDS) break;
       batch.push(n); seconds += n.estSeconds;
     }
-    const vramGb = Math.max(...batch.map((n) => n.vramGb));
+    const vramGb = Math.min(LEASE_MAX_VRAM_GB, Math.max(config.sdcppVramGb, ...Object.values(SPECS).map((spec) => spec.vramGb), ...batch.map((n) => n.vramGb)));
     const queued = batch.length - 1;
+    seconds = Math.min(Math.max(seconds, LEASE_MIN_SECONDS), MAX_EST_SECONDS);
     const lease = await acquireImpl(config, {
       consumer: config.sdcppConsumer, vramGb, estSeconds: seconds, note: `ogai-local job ${job.id}${queued ? ` (+${queued} queued)` : ''}`,
     }, { log });

@@ -1,0 +1,13 @@
+# Build context rules for the ogai-local image (BuildKit prefers this over the repo-root .dockerignore, which excludes vendor/
+# because the web image must not ship the 1.4GB sd.cpp bundle). ogai-local NEEDS custom/local-service/vendor.
+.git
+**/.git
+node_modules
+**/node_modules
+.next
+dist
+release
+docs
+*.png
+.env
+.env.*
