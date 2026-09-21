@@ -24,7 +24,8 @@ behind a small stand-in for `require('electron')`, and exposes them over HTTP.
 Upstream's Linux sd.cpp binaries are CPU/Vulkan/ROCm only and this host's Xeon has no AVX2, so we build our own:
 ```bash
 custom/local-service/build-sdcpp.sh          # CUDA 12.6 build for sm_61 + sm_70, AVX-only CPU code -> vendor/sdcpp/ (git-ignored)
-custom/local-service/deploy.sh --build       # image bundles vendor/sdcpp; it MUST exist before the image builds
+custom/local-service/fetch-ffmpeg.sh         # static ffmpeg -> vendor/ffmpeg/ (git-ignored): sd.cpp's MJPEG avi is re-encoded to a browser-playable mp4
+custom/local-service/deploy.sh --build       # image bundles vendor/sdcpp + vendor/ffmpeg; both MUST exist before the image builds
 ```
 The container only sees the GPUs you pass in. First deployment - GTX 1080 only, V100 physically unreachable, no arbiter:
 ```bash
@@ -88,6 +89,22 @@ claude mcp add --transport http ogai http://HOST:8790/mcp --header "Authorizatio
 ## Tests
 `cd custom/local-service && node --test test/*.test.js` (never pass a directory to `--test`). Zero dependencies.
 
-## Not yet wired (separate plans)
-sd.cpp CUDA build (upstream's Linux binary is CPU/Vulkan/ROCm only and the host CPU has no AVX2), WanGP + ComfyUI(Qwen)
-adapters, web-app UI + `window.localAI` shim, registering `ogai-local` in the arbiter registry, GPU test renders.
+## Models served through sd.cpp, measured on the V100 (2026-09-20, supervised, through the arbiter)
+
+Model files are read from the ComfyUI stores mounted read-only (`OGAI_MODEL_MOUNTS`). One V100 lease covers a whole queued batch.
+
+| Model | Recipe | Measured |
+|---|---|---|
+| Flux.1 Dev (Q8_0) | 1024x1024, 20 steps, `--diffusion-fa --vae-tiling` | 160s incl. ~100s load; peak 28.8GB (VAE decode adds ~6GB) |
+| Qwen-Image 2512 (Q6_K) | 1024x1024, 20 steps, `--diffusion-fa --vae-tiling --flow-shift 3` | 187s; peak 24.5GB with tiling (31.9GB without); fp8-scaled Qwen2.5-VL encoder loads |
+| Wan 2.2 I2V (Q4_K_M pair) | quality mode only, 640x368, 33 frames, `--params-backend te=cpu --vae-tiling` | 377s; peak 27.4GB; host RAM stays >12GB free; mp4 output |
+
+Do not retry (all measured to fail here): Wan "fast" lightx2v LoRAs (sd-cli aborts in every `--lora-apply-mode`), `--offload-to-cpu` for Wan
+(23.5GB of shmem -> kernel OOM kill), Wan with no placement flag (VAE decode OOM), `--max-vram` (weight-preparation failure), `--backend te=cpu` (SIGSEGV).
+The full story is in `custom/docs/plans/2026-09-20-ogai-local-sdcpp-models.md`.
+
+## Web GUI
+The Next app talks to this service only through its own `/api/local/*` proxy (see `custom/README.md`, "Local inference").
+
+## Not yet wired
+Wan T2V / Hunyuan / LTX / MiniMax-H3 through sd.cpp (T2V weights are not on disk); `sync-upstream.sh` does not build/deploy this service yet.
