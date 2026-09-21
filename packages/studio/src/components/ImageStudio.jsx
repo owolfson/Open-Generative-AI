@@ -7,6 +7,9 @@ import { formatErrorMessage } from "../utils/formatError.js";
 import { scopedPersistKey, migrateLegacyPersistKey } from "../persistKey.js";
 import DrawModal from "./DrawModal.jsx";
 import ModelParameterControls from "./ModelParameterControls.jsx";
+import LocalStudio from "../local/LocalStudio.jsx";
+import LocalToggle from "../local/LocalToggle.jsx";
+import { useLocalMode } from "../local/useLocal.js";
 import MobileGenerationActions, {
   GenerationCopyButtons,
 } from "./MobileGenerationActions.jsx";
@@ -979,6 +982,7 @@ export default function ImageStudio({
   locale = "en",
 }) {
   const copy = resolveCopy(en, zh, locale);
+  const [localMode] = useLocalMode(); // ⚡ Local: own-GPU generator instead of the Muapi cloud one (see ../local)
   const LEGACY_PERSIST_KEY = "hg_image_studio_persistent";
   const PERSIST_KEY = scopedPersistKey(LEGACY_PERSIST_KEY, apiKey);
   useEffect(() => {
@@ -1463,6 +1467,8 @@ export default function ImageStudio({
         ? copy.promptBar.placeholderI2I
         : copy.promptBar.placeholderT2I;
 
+  if (localMode) return <LocalStudio kind="image" onGenerationStart={onGenerationStart} onGenerationEnd={onGenerationEnd} onGenerationComplete={onGenerationComplete} onGenerationError={onGenerationError} />;
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="w-full h-full flex flex-col items-center justify-center bg-app-bg relative p-4 md:p-6 overflow-hidden">
@@ -1678,6 +1684,7 @@ export default function ImageStudio({
           <PromptFooter>
             {/* Left controls */}
             <PromptControls ref={dropdownRef}>
+              <LocalToggle />
               {/* Model button */}
               <div className="relative">
                 <button

@@ -7,6 +7,9 @@ import { formatErrorMessage } from "../utils/formatError.js";
 import { scopedPersistKey, migrateLegacyPersistKey } from "../persistKey.js";
 import DrawModal from "./DrawModal.jsx";
 import ModelParameterControls from "./ModelParameterControls.jsx";
+import LocalStudio from "../local/LocalStudio.jsx";
+import LocalToggle from "../local/LocalToggle.jsx";
+import { useLocalMode } from "../local/useLocal.js";
 import { VideoOptionControl, VideoSettingsControl } from "./VideoModelControls.jsx";
 import MobileGenerationActions, {
   GenerationCopyButtons,
@@ -783,6 +786,7 @@ export default function VideoStudio({
   locale = "en",
 }) {
   const copy = useMemo(() => resolveCopy(en, zh, locale), [locale]);
+  const [localMode] = useLocalMode(); // ⚡ Local: own-GPU generator instead of the Muapi cloud one (see ../local)
   const LEGACY_PERSIST_KEY = "hg_video_studio_persistent";
   const PERSIST_KEY = scopedPersistKey(LEGACY_PERSIST_KEY, apiKey);
   useEffect(() => {
@@ -2482,6 +2486,8 @@ export default function VideoStudio({
     setOpenDropdown((prev) => (prev === type ? null : type));
   };
 
+  if (localMode) return <LocalStudio kind="video" onGenerationStart={onGenerationStart} onGenerationEnd={onGenerationEnd} onGenerationComplete={onGenerationComplete} onGenerationError={onGenerationError} />;
+
   // ── render ────────────────────────────────────────────────────────────────
   return (
     <div
@@ -2942,6 +2948,7 @@ export default function VideoStudio({
           {/* Bottom row: controls + generate */}
           <PromptFooter>
             <PromptControls ref={dropdownRef}>
+              <LocalToggle />
               {/* Model btn */}
               <div className="relative">
                 <button

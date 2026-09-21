@@ -3,11 +3,14 @@
 # wait for the healthcheck, and roll back to the previous image if the new one never goes healthy.
 # Usage: custom/deploy.sh [image]      (default open-generative-ai:latest)
 # Env:   OGAI_PORT (3002)  OGAI_DATA (/mnt/user/appdata/open-generative-ai)  OGAI_ICON
+#        OGAI_LOCAL_URL  base URL of the ogai-local service (enables the ⚡ Local studio; empty = feature hidden). The bearer token is
+#        read by the app from $DATA/.mcp-token (shared /data volume). Host-only values may live in $DATA/deploy.env.
 set -euo pipefail
 NAME=Open-Generative-AI
 IMG=${1:-open-generative-ai:latest}
 PORT=${OGAI_PORT:-3002}
 DATA=${OGAI_DATA:-/mnt/user/appdata/open-generative-ai}
+. "$(dirname "$0")/local-service/lib-env.sh"; load_host_env "$DATA/deploy.env"   # host-only settings; real env vars win
 
 # Keep whatever icon/TZ the running container already has; fall back to generic values on a fresh install.
 label() { docker inspect -f "{{index .Config.Labels \"$1\"}}" "$NAME" 2>/dev/null || true; }
@@ -21,6 +24,7 @@ run_container() {
     -p "$PORT:3000" -v "$DATA:/data" \
     -e TZ="$TZ_VAL" -e NODE_ENV=production \
     -e HOST_OS=Unraid -e HOST_HOSTNAME="$(hostname)" -e HOST_CONTAINERNAME="$NAME" \
+    -e OGAI_LOCAL_URL="${OGAI_LOCAL_URL:-}" \
     -l net.unraid.docker.managed=dockerman -l "net.unraid.docker.icon=$ICON" \
     -l 'net.unraid.docker.webui=http://[IP]:[PORT:3000]/' \
     "$1" >/dev/null

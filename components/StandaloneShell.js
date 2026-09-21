@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { ImageStudio, VideoStudio, ClippingStudio, MotionControlStudio, VibeMotionStudio, LipSyncStudio, RecastStudio, CinemaStudio, AudioStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, AiInfluencerStudio, LayersStudio, getUserBalance } from 'studio';
+import { ImageStudio, VideoStudio, ClippingStudio, MotionControlStudio, VibeMotionStudio, LipSyncStudio, RecastStudio, CinemaStudio, AudioStudio, MarketingStudio, WorkflowStudio, AgentStudio, AppsStudio, AiInfluencerStudio, LayersStudio, getUserBalance, LocalModelsPanel, LocalHeaderChip, useLocalStatus } from 'studio';
 
 const DesignAgentStudio = dynamic(() => import('studio').then(mod => mod.DesignAgentStudio), {
   ssr: false,
@@ -267,6 +267,7 @@ const getNavigationCategory = (tabId) => (
 );
 
 const STORAGE_KEY = 'muapi_key';
+const LOCAL_ONLY_KEY = 'local-only'; // sentinel stored instead of a Muapi key when the user runs on local models only (custom/)
 const NOTIFICATIONS_STORAGE_KEY = 'open_gen_notifications_v1';
 const MAX_VISIBLE_NOTIFICATIONS = 3;
 
@@ -346,6 +347,8 @@ export default function StandaloneShell({ locale = 'en' }) {
 
   const [balance, setBalance] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const localStatus = useLocalStatus(); // ⚡ local inference (custom/): drives the local-only sign-in and Settings -> Local models
+  const localOnly = apiKey === LOCAL_ONLY_KEY;
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const [hasMounted, setHasMounted] = useState(false);
   const [showVadooBanner, setShowVadooBanner] = useState(() => {
@@ -592,6 +595,18 @@ export default function StandaloneShell({ locale = 'en' }) {
     document.cookie = `muapi_key=${key}; path=/; max-age=31536000; SameSite=Lax`;
   }, [fetchBalance]);
 
+  const handleLocalOnly = useCallback(() => {
+    try { localStorage.setItem('ogai_local_mode', '1'); } catch { /* not persisted */ }
+    handleKeySave(LOCAL_ONLY_KEY);
+  }, [handleKeySave]);
+
+  // The local studio's "Animate" button asks the shell to open another studio tab.
+  useEffect(() => {
+    const onNavigate = (e) => { if (e.detail && e.detail.tab) handleTabChange(e.detail.tab); };
+    window.addEventListener('ogai-local-navigate', onNavigate);
+    return () => window.removeEventListener('ogai-local-navigate', onNavigate);
+  }, [handleTabChange]);
+
   const handleKeyChange = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     setApiKey(null);
@@ -676,7 +691,7 @@ export default function StandaloneShell({ locale = 'en' }) {
   );
 
   if (!apiKey) {
-    return <ApiKeyModal onSave={handleKeySave} locale={locale} />;
+    return <ApiKeyModal onSave={handleKeySave} onLocalOnly={localStatus.phase !== 'unconfigured' ? handleLocalOnly : undefined} locale={locale} />;
   }
 
   return (
@@ -796,6 +811,7 @@ export default function StandaloneShell({ locale = 'en' }) {
 
           {/* Right: Actions */}
           <div className="flex-shrink-0 flex items-center gap-3">
+            <LocalHeaderChip onClick={() => setShowSettings(true)} />
             <div className="flex items-center gap-2.5 bg-white/5 px-3 py-1.5 rounded-full border border-white/5 transition-colors">
               <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
               <span className="text-xs font-bold text-white/90">
@@ -1175,7 +1191,7 @@ export default function StandaloneShell({ locale = 'en' }) {
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in-up">
-          <div className="bg-[#0a0a0a] border border-white/10 rounded-xl p-8 w-full max-w-sm shadow-2xl">
+          <div className={`bg-[#0a0a0a] border border-white/10 rounded-xl p-8 w-full ${localStatus.phase !== 'unconfigured' ? 'max-w-xl max-h-[90vh] overflow-y-auto custom-scrollbar' : 'max-w-sm'} shadow-2xl`}>
             <h2 className="text-white font-bold text-lg mb-2">{copy.settingsModal.title}</h2>
             <p className="text-white/40 text-[13px] mb-8">
               {copy.settingsModal.subtitle}
@@ -1187,17 +1203,24 @@ export default function StandaloneShell({ locale = 'en' }) {
                    {copy.settingsModal.activeApiKey}
                 </label>
                 <div className="text-[13px] font-mono text-white/80">
-                  {apiKey.slice(0, 8)}••••••••••••••••
+                  {localOnly ? 'Local models only (no Muapi key)' : `${apiKey.slice(0, 8)}••••••••••••••••`}
                 </div>
               </div>
             </div>
+
+            {localStatus.phase !== 'unconfigured' && (
+              <div className="mb-8">
+                <h3 className="text-white font-bold text-sm mb-3">Local models</h3>
+                <LocalModelsPanel />
+              </div>
+            )}
 
             <div className="flex gap-3">
               <button
                 onClick={handleKeyChange}
                 className="flex-1 h-10 rounded-md bg-red-500/10 text-red-400 hover:bg-red-500/20 text-xs font-semibold transition-all"
               >
-                {copy.settingsModal.changeKey}
+                {localOnly ? 'Add a Muapi key' : copy.settingsModal.changeKey}
               </button>
               <button
                 onClick={() => setShowSettings(false)}

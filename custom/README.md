@@ -55,8 +55,21 @@ changes never conflict with us.
 | `./src/models.js` subpath export | `packages/studio/package.json` | upstream's per-component exports commit dropped it; the legacy `src/lib/models.js` re-exports it, so `vite build` breaks | 1 line - candidate for an upstream PR |
 | `.dockerignore` | repo root | upstream ships none, so every build shipped `node_modules`/`.git`/`release` as context | new file |
 | build / deploy / sync / smoke scripts, overlay Dockerfile, Unraid template | `custom/` | fork tooling | none |
+| ⚡ Local studio: proxy route + client/hooks/UI | `app/api/local/**`, `packages/studio/src/local/**` | generate on this server's GPUs through `ogai-local` (Image + Video studios, Settings -> Local models) | new files only |
+| studio exports | `packages/studio/src/index.js` | export the local components | 5 lines |
+| ⚡ toggle + local view swap | `packages/studio/src/components/ImageStudio.jsx`, `VideoStudio.jsx` | `useLocalMode()` + early `return <LocalStudio/>` + `<LocalToggle/>` in the controls row | 3 imports, 1 hook line, 1 early return, 1 toggle line each |
+| header chip, Settings -> Local models, local-only sign-in, "Animate" navigation | `components/StandaloneShell.js` | local status chip; `LocalModelsPanel` in Settings; `local-only` key sentinel; `ogai-local-navigate` listener | ~30 lines, all marked `custom/` |
+| "Use local models only" button | `components/ApiKeyModal.js` | run without a Muapi key | 1 prop + 1 button |
 
 Add a row here whenever a change outside `custom/` is made - this table is what you re-check after a bad merge.
+
+## Local inference (⚡ Local)
+
+The Image and Video studios have a ⚡ Local switch: on = the studio shows `packages/studio/src/local/LocalStudio.jsx`, which
+generates on this server's GPUs through the `ogai-local` service (Flux / Qwen-Image / Z-Image / SD on the GTX 1080 or V100,
+Wan 2.2 image-to-video on the V100). The browser only talks to `/api/local/*` (allowlisted server-side proxy, token stays on the
+server). Enable it with `OGAI_LOCAL_URL=http://<host>:8790` in `$DATA/deploy.env`; without it the feature is hidden.
+Tests for the pure parts: `node --test custom/web-tests/*.test.mjs`.
 
 ## Not in this repo
 

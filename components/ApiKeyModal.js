@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { getCommonCopy } from '@/lib/locales';
 
-export default function ApiKeyModal({ onSave, onClose, overlay = false, title, subtitle, locale = 'en' }) {
+export default function ApiKeyModal({ onSave, onClose, onLocalOnly, overlay = false, title, subtitle, locale = 'en' }) {
   const [key, setKey] = useState('');
   const [error, setError] = useState('');
   const copy = getCommonCopy(locale).apiKeyModal;
@@ -73,6 +73,17 @@ export default function ApiKeyModal({ onSave, onClose, overlay = false, title, s
           >
             {copy.submit}
           </button>
+
+          {onLocalOnly && (
+            <button
+              type="button"
+              onClick={onLocalOnly}
+              data-testid="local-only-button"
+              className="w-full border border-white/10 text-white/70 font-medium py-2.5 rounded-md hover:border-[#22d3ee]/40 hover:text-[#22d3ee] transition-colors text-sm"
+            >
+              ⚡ Use local models only (no key)
+            </button>
+          )}
 
           <p className="text-center text-[12px] text-white/20 pt-2">
             {copy.needKey}{' '}
