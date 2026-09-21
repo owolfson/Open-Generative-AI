@@ -16,7 +16,7 @@
   <WebUI>http://[IP]:[PORT:8790]/health</WebUI>
   <TemplateURL/>
   <Icon>https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/openai.svg</Icon>
-  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <ExtraParams>--runtime=nvidia --restart=unless-stopped</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
@@ -34,4 +34,6 @@
   <Config Name="Allowed devices" Target="OGAI_ALLOWED_DEVICES" Default="v100,gtx1080" Mode="" Description="Which GPUs jobs may use. v100 needs the arbiter and evicts the Hermes brain; gtx1080 never does." Type="Variable" Display="advanced" Required="false" Mask="false">v100,gtx1080</Config>
   <Config Name="CUDA index V100" Target="OGAI_DEVICE_INDEX_V100" Default="0" Mode="" Description="CUDA index of the V100 INSIDE the container" Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
   <Config Name="CUDA index GTX 1080" Target="OGAI_DEVICE_INDEX_1080" Default="1" Mode="" Description="CUDA index of the GTX 1080 INSIDE the container (0 if it is the only GPU passed in)" Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+  <Config Name="NVIDIA Visible Devices" Target="NVIDIA_VISIBLE_DEVICES" Default="" Mode="" Description="GPU UUIDs the container may use (nvidia-smi -L), V100 first. Empty = no GPU (GPU jobs then fail with a clear error)." Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="NVIDIA Driver Capabilities" Target="NVIDIA_DRIVER_CAPABILITIES" Default="compute,utility" Mode="" Description="Driver capabilities to expose" Type="Variable" Display="advanced" Required="false" Mask="false">compute,utility</Config>
 </Container>
