@@ -99,7 +99,11 @@ const SPECS = {
     defaults: () => ({ width: 640, height: 368, steps: 30, cfg_scale: 6, video_frames: 33, fps: 24 }),
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm, '--t5xxl', f.t5xxl,
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
-      ...(p.negative_prompt ? ['-n', p.negative_prompt] : []), '--params-backend', 'te=cpu', '--vae-tiling'],
+      ...(p.negative_prompt ? ['-n', p.negative_prompt] : []), '--params-backend', 'te=cpu',
+      // The default VAE decode needs ~13GB on top of the 16GB model and fails ("cannot make enough memory available") even with sd.cpp's own tiling retry.
+      // Measured on the V100 (4-step runs, 640x368): 17 frames decode with plain --vae-tiling (peak 28.9GB); 33 frames need small spatial tiles + temporal
+      // tiling (peak 19GB, but the decode takes minutes).
+      '--vae-tiling', '--temporal-tiling', '--vae-tile-size', '8x8'],
   },
   'wan2gp:ltx-video': {
     // LTX-2.3 22B distilled as a Q4_K_M GGUF (unsloth), run by sd.cpp exactly as its docs/ltx2.md shows (distilled = 8 steps, cfg 1).

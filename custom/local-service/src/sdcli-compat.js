@@ -6,9 +6,20 @@ const path = require('node:path');
 // conflict on every merge), the stand-in respells such names on the way to the binary, exactly as it already stands in for Electron.
 const SAMPLER_FLAGS = new Set(['--sampling-method', '--high-noise-sampling-method']);
 
-/** Respell upstream's `dpmpp*` sampler names as `dpm++*` for the value that follows a sampler flag. Returns a new array. */
+// Flags upstream's engine still passes that this sd.cpp removed (it detects the model version from the file now): `--sd-version <v>`, `--flux`.
+const VALUE_FLAGS_WITH_TEXT = new Set(['-p', '-n', '--prompt', '--negative-prompt']);   // the argument after these is user text, never a flag
+const DROPPED = new Map([['--sd-version', 1], ['--flux', 0]]);   // flag -> number of value arguments to drop with it
+
+/** Respell upstream's `dpmpp*` sampler names as `dpm++*` and drop removed flags. Returns a new array. */
 function fixSamplerArgs(args) {
-  return args.map((arg, i) => (i > 0 && SAMPLER_FLAGS.has(args[i - 1]) && typeof arg === 'string' && arg.startsWith('dpmpp') ? `dpm++${arg.slice(5)}` : arg));
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const afterText = i > 0 && VALUE_FLAGS_WITH_TEXT.has(args[i - 1]);
+    if (!afterText && typeof arg === 'string' && DROPPED.has(arg)) { i += DROPPED.get(arg); continue; }
+    out.push(i > 0 && SAMPLER_FLAGS.has(args[i - 1]) && typeof arg === 'string' && arg.startsWith('dpmpp') ? `dpm++${arg.slice(5)}` : arg);
+  }
+  return out;
 }
 
 /** Wrap child_process.spawn so that sd-cli invocations get their sampler names fixed. Idempotent; other programs are untouched. */

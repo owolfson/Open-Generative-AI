@@ -177,6 +177,8 @@ test('HunyuanVideo 1.5: sd.cpp doc recipe (diffusion + vae + Qwen2.5-VL as --llm
   assert.ok(pair(args, '--llm', HY_FILES.llm)); assert.ok(pair(args, '--t5xxl', HY_FILES.t5xxl));
   assert.ok(pair(args, '--cfg-scale', 6)); assert.ok(pair(args, '--sampling-method', 'euler')); assert.ok(args.includes('--diffusion-fa')); assert.ok(args.includes('--vae-tiling'));
   assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--params-backend', 'te=cpu'));
+  // measured on the V100: the untiled/default-tiled VAE decode needs 13GB beside the 16GB model and fails; small spatial tiles + temporal tiling decode 33 frames in ~19GB
+  assert.ok(args.includes('--temporal-tiling')); assert.ok(pair(args, '--vae-tile-size', '8x8'));
   assert.equal(args.includes('--high-noise-diffusion-model'), false); assert.equal(args.includes('-i'), false);
 });
 

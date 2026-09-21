@@ -24,3 +24,10 @@ test('installSdCliCompat wraps spawn for the sd-cli binary only, passes options 
   assert.deepEqual(calls[1].args, ['--sampling-method', 'dpmpp2m'], 'other programs are never touched');
   assert.equal(calls.length, 2, 'installing twice must not double-wrap (each spawn reaches the original once)');
 });
+
+test('fixSamplerArgs also drops flags this sd.cpp no longer has (--sd-version <v>, --flux): the build detects the model version itself', () => {
+  assert.deepEqual(fixSamplerArgs(['-m', '/m/sdxl.safetensors', '-p', 'x', '--sampling-method', 'dpmpp2m', '--sd-version', 'sdxl', '-v']), ['-m', '/m/sdxl.safetensors', '-p', 'x', '--sampling-method', 'dpm++2m', '-v']);
+  assert.deepEqual(fixSamplerArgs(['--sd-version', 'sd2', '--steps', '20']), ['--steps', '20']);
+  assert.deepEqual(fixSamplerArgs(['--flux', '-p', 'x']), ['-p', 'x']);
+  assert.deepEqual(fixSamplerArgs(['-p', '--sd-version', '-n', '--flux']), ['-p', '--sd-version', '-n', '--flux'], 'flag-looking prompt text right after -p/-n is a value, not a flag');
+});
