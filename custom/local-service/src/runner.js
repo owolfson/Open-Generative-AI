@@ -81,8 +81,13 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     if (job.route !== 'sdcpp') throw codeError('ENGINE_NOT_READY', `engine route "${job.route}" is not wired yet`);
     const { device: requested, ...engineParams } = job.params;
     const known = assess(engineParams.model);
-    const onGtx1080 = chooseDevice(requested, config.allowedDevices, known && known.weightsGb) === 'gtx1080';
     const spec = getSpec(engineParams.model);
+    let pool = config.allowedDevices;
+    if (spec && spec.devices) {   // a model that only works on some GPUs (e.g. Z-Image Base: blank on the V100)
+      if (requested && !spec.devices.includes(requested)) throw codeError('DEVICE_NOT_SUPPORTED', `${engineParams.model} cannot run on ${requested}: ${spec.deviceNote || `it only supports ${spec.devices.join(', ')}`}`);
+      pool = pool.filter((d) => spec.devices.includes(d));
+    }
+    const onGtx1080 = chooseDevice(requested, pool, known && known.weightsGb) === 'gtx1080';
     if (!spec) return { onGtx1080, engineParams, need: { vramGb: config.sdcppVramGb, estSeconds: EST_IMAGE_SECONDS } };
     // Everything that can fail cheaply fails HERE, before any arbiter lease: a job that cannot run must never evict the brain.
     const params = prepare(spec, engineParams);

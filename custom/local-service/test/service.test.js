@@ -56,6 +56,7 @@ test('catalogPayload tells agents which extended models are runnable right now (
   assert.equal(byId['wan2gp:wan22-i2v'].filesPresent, false);
   assert.equal(byId['wan2gp:wan22-i2v'].needsImage, true); assert.equal(byId['wan2gp:wan22-t2v'].needsImage, false); assert.equal(byId['wan2gp:hunyuan-video'].needsImage, false);   // the GUI shows the image picker only when needed
   assert.equal(byId['wan2gp:flux-dev'].needsImage, undefined, 'image models have no such flag');
+  assert.deepEqual(byId['z-image-base'].devices, ['gtx1080']); assert.match(byId['z-image-base'].deviceNote, /blank/); assert.equal(byId['wan2gp:flux-dev'].devices, undefined);   // per-model device restriction reaches clients
   assert.equal(byId['wan2gp:ltx-video'].needsImage, false); assert.equal(byId['wan2gp:ltx-video'].acceptsImage, true); assert.equal(byId['wan2gp:wan22-t2v'].acceptsImage, false);   // LTX: image optional
 });
 

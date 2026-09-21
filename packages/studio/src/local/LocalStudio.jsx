@@ -516,7 +516,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                   <PromptMenuList>
                     {[["auto", "Auto", "GTX 1080 for small models; the V100 only when a model needs it"], ["gtx1080", "GTX 1080", "8 GB · never interrupts Hermes"], ["v100", "Tesla V100", "32 GB · stops the Hermes brain (~5 min) and TTS (~7 min)"]].map(([id, label, desc]) => (
                       <PromptMenuItem key={id} selected={id === deviceChoice} wrapDescription description={desc}
-                        disabled={id !== "auto" && !allowed.includes(id)} className={id !== "auto" && !allowed.includes(id) ? "opacity-50 cursor-not-allowed" : ""}
+                        disabled={id !== "auto" && (!allowed.includes(id) || (model && Array.isArray(model.devices) && !model.devices.includes(id)))} className={id !== "auto" && (!allowed.includes(id) || (model && Array.isArray(model.devices) && !model.devices.includes(id))) ? "opacity-50 cursor-not-allowed" : ""}
                         onClick={() => { setDeviceChoice(id); savePrefs(kind, { device: id }); setOpen(null); }}>{label}</PromptMenuItem>
                     ))}
                   </PromptMenuList>

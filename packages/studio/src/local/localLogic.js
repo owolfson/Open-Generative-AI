@@ -12,7 +12,7 @@ export const proxyUrl = (url) => (typeof url === 'string' && url.startsWith('/ou
 /** What a video model takes, for the model picker. */
 export const kindLabel = (model) => (model.kind !== 'video' ? '' : model.needsImage ? 'image → video' : model.acceptsImage ? 'text / image → video' : 'text → video');
 
-export const needsV100 = (model) => !(typeof model.weightsGb === 'number' && model.weightsGb <= GTX1080_MAX_WEIGHTS_GB);
+export const needsV100 = (model) => (Array.isArray(model.devices) ? !model.devices.includes('gtx1080') : !(typeof model.weightsGb === 'number' && model.weightsGb <= GTX1080_MAX_WEIGHTS_GB));
 
 /** Can this model be run right now, and if not, why. tone: ok | warn | muted. */
 export function modelReadiness(model) {
@@ -40,7 +40,8 @@ export function pickerModels(models = [], kind) {
 /** Pick the device for a request. choice: 'auto' | 'gtx1080' | 'v100'. Never picks the V100 unless the model needs it or the user chose it. */
 export function resolveDevice(model, choice, health) {
   const allowed = (health && health.allowedDevices) || [];
-  const device = !choice || choice === 'auto' ? (needsV100(model) ? 'v100' : 'gtx1080') : choice;
+  const device = !choice || choice === 'auto' ? (Array.isArray(model.devices) ? model.devices[0] : needsV100(model) ? 'v100' : 'gtx1080') : choice;
+  if (Array.isArray(model.devices) && !model.devices.includes(device)) return { error: `${model.name} only runs on the ${model.devices.map((d) => DEVICE_LABEL[d] || d).join(' / ')}${model.deviceNote ? `: ${model.deviceNote}` : ''}.` };
   if (!allowed.includes(device)) return { error: `${DEVICE_LABEL[device] || device} is not enabled on this server.` };
   if (device === 'gtx1080' && needsV100(model)) return { error: `${model.name} is too big for the GTX 1080; use the V100.` };
   return { device, v100: device === 'v100' };

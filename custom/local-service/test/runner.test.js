@@ -353,3 +353,24 @@ test('a lease claims the biggest V100 model footprint even for a small job, so a
   assert.equal(gate.calls.length, 1, 'one lease covers both');
   assert.equal(gate.releases, 1);
 });
+
+// ---------- Z-Image Base: 1080-only (it renders a blank image on the V100) ----------
+const ZBASE_FILES = ['z-image-Q8_0.gguf', 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf', 'ae.safetensors'];
+function zbaseRunner() {
+  const { standin, gate } = fakes(); const sd = fakeSdcli('PNGBYTES');
+  const cfg = config({ modelDirs: [modelDir(ZBASE_FILES)] });
+  return { gate, sd, r: createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: sd, log: quiet }) };
+}
+
+test('Z-Image Base defaults to the GTX 1080 (no arbiter lease) even though its weights are too big for the "small model" rule', async () => {
+  const { gate, sd, r } = zbaseRunner();
+  await r.run(job({ params: { model: 'z-image-base', prompt: 'a cat' } }), ctx());
+  assert.equal(gate.calls.length, 0, 'never touches the V100 lease');
+  assert.equal(sd.calls[0].env.CUDA_VISIBLE_DEVICES, '1');
+});
+
+test('Z-Image Base refuses the V100 up front with the reason (blank white image, measured), before any lease', async () => {
+  const { gate, sd, r } = zbaseRunner();
+  await assert.rejects(() => r.run(job({ params: { model: 'z-image-base', prompt: 'a cat', device: 'v100' } }), ctx()), (e) => e.code === 'DEVICE_NOT_SUPPORTED' && /blank/.test(e.message));
+  assert.equal(gate.calls.length, 0); assert.equal(sd.calls.length, 0);
+});

@@ -52,8 +52,11 @@ const SPECS = {
     // V100, with cfg 1/5/7.5, euler/default sampler, with/without flash attention and the simple scheduler, and the file is byte-identical to Hugging Face's.
     // The Q8_0 quant of the same model renders correctly, so Z-Image Base is served from OUR spec with Q8_0 (7.2GB; 50 steps is slow, 30 is the default).
     id: 'z-image-base', kind: 'image', ext: 'png', vramGb: 14,
+    // ...and it renders a BLANK image on the V100 at every size and setting tried (512 and 1024, with and without flash attention) while the SAME file renders
+    // correctly on the GTX 1080: fp16 tensor-core overflow on Volta. So it is restricted to the 1080, where it runs through host-RAM offload (slow: sizes are 768-based).
+    devices: ['gtx1080'], deviceNote: 'it renders a blank image on the Tesla V100 (fp16 overflow, measured at 512 and 1024) and only works on the GTX 1080', imageBase: 768,
     files: { diffusion: 'z-image-Q8_0.gguf', llm: 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf', vae: 'ae.safetensors' },
-    defaults: () => ({ width: 1024, height: 1024, steps: 30, cfg_scale: 5 }),
+    defaults: () => ({ width: 768, height: 768, steps: 20, cfg_scale: 5 }),
     build: (p, f) => ['--diffusion-model', f.diffusion, '--llm', f.llm, '--vae', f.vae, '--sampling-method', 'euler', '--diffusion-fa', ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
   },
   'wan2gp:flux-dev': {
@@ -164,7 +167,7 @@ const VIDEO_DIMS = { '1:1': [480, 480], '16:9': [640, 368], '9:16': [368, 640], 
 function dimsFor(spec, ar) {
   if (spec.dims) return spec.dims[ar] || null;
   if (spec.kind === 'video') return VIDEO_DIMS[ar] || null;
-  const base = 1024;
+  const base = spec.imageBase || 1024;
   const align = (v) => Math.round(v / 64) * 64;
   return {
     '1:1': [base, base], '16:9': [align((base * 16) / 9), base], '9:16': [base, align((base * 16) / 9)],

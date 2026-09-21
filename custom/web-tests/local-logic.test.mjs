@@ -108,3 +108,12 @@ test('LTX takes an OPTIONAL image: sent when given, omitted when not; labelled t
   assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100' }).image_base64, undefined);
   assert.equal(buildParams({ model: t2v, prompt: 'x', aspect: '16:9', device: 'v100', imageBase64: 'AAAA' }).image_base64, undefined, 'text-only models still never send one');
 });
+
+const zbase = { id: 'z-image-base', name: 'Z-Image Base', kind: 'image', route: 'sdcpp', star: false, weightsGb: 7.2, filesPresent: true, devices: ['gtx1080'], deviceNote: 'renders a blank image on the V100' };
+
+test('a model restricted to the GTX 1080 never auto-picks (or accepts) the V100, even though its weights exceed the small-model rule', () => {
+  assert.equal(needsV100(zbase), false);
+  assert.deepEqual(resolveDevice(zbase, 'auto', health), { device: 'gtx1080', v100: false });
+  assert.match(resolveDevice(zbase, 'v100', health).error, /Z-Image Base only runs on the GTX 1080.*blank/);
+  assert.deepEqual(resolveDevice(zbase, 'gtx1080', health), { device: 'gtx1080', v100: false });
+});
