@@ -82,6 +82,12 @@ if ! git merge --no-edit -q main; then
   fi
 fi
 
+# The merged tree must still pass OUR tests: the local-service suite includes tripwires that fail when upstream adds an npm dependency to
+# electron/lib or a model we have not assessed for the V100 (a silent drift would ship an untested engine into ogai-local).
+say "running local-service + web tests on the merged tree"
+bash -c "${OGAI_TEST_CMD:-node --test custom/local-service/test/*.test.js && node --test custom/web-tests/*.test.mjs}" > /tmp/ogai-sync-tests.log 2>&1 \
+  || { tail -25 /tmp/ogai-sync-tests.log; fail "tests failed on merged upstream (see /tmp/ogai-sync-tests.log)" tests-failed; }
+
 say "building candidate"
 OGAI_ASSUME_CLEAN=1 ./custom/build.sh open-generative-ai:candidate || fail "image build failed on merged upstream" build-failed
 # Evidence trail: a 2026-09-19 run labelled a clean tree "-dirty" and the cause was never found.
@@ -102,6 +108,22 @@ if [ "$MODE" = --deploy ]; then
   if ! ./custom/smoke.sh "http://127.0.0.1:${OGAI_PORT:-3002}"; then
     ./custom/deploy.sh open-generative-ai:prev || true
     fail "live smoke failed after deploy - rolled back" deploy-failed
+  fi
+fi
+
+# ogai-local bundles upstream's electron/lib (the local engine), so it must be rebuilt from the merged tree too. A redeploy restarts it,
+# which would kill a job in flight: skip (loudly) when one is running, and never let this step undo the web deploy above.
+if [ "$MODE" = --deploy ]; then
+  busy=$(curl -s -m 10 -H "Authorization: Bearer $(cat "$DATA/.mcp-token" 2>/dev/null)" "${OGAI_LOCAL_URL:-http://127.0.0.1:8790}/api/local/jobs" \
+    | python3 -c 'import json,sys; print(sum(1 for j in json.load(sys.stdin)["jobs"] if j["status"] in ("queued","running")))' 2>/dev/null || echo 0)
+  if [ "${busy:-0}" -gt 0 ]; then
+    say "WARN: ogai-local has $busy active job(s) - NOT redeployed; run custom/local-service/deploy.sh --build when idle"
+    tg "ogai-local NOT redeployed (job running): run deploy.sh --build when idle"
+  elif bash -c "${OGAI_LOCAL_DEPLOY_CMD:-./custom/local-service/deploy.sh --build}"; then
+    say "ogai-local redeployed from the merged tree"
+  else
+    say "WARN: ogai-local redeploy FAILED (the web app is already updated)"
+    tg "ogai-local redeploy FAILED (web updated): check custom/local-service/deploy.sh"
   fi
 fi
 
