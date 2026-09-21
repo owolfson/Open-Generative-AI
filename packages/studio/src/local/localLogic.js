@@ -20,7 +20,7 @@ export function modelReadiness(model) {
   if (typeof model.filesPresent === 'boolean') {   // Flux / Qwen-Image / Wan: weights are mounted read-only from the ComfyUI stores
     return model.filesPresent
       ? { ready: true, tone: 'ok', label: 'Ready' }
-      : { ready: false, tone: 'warn', label: 'Files missing', reason: 'Its weights are not in the mounted model folders.' };
+      : { ready: false, tone: 'warn', label: 'Files missing', reason: 'Its weights are not on the server yet (custom/local-service/fetch-models.py downloads the Wan text-to-video and Hunyuan files).' };
   }
   const aux = Object.values(model.auxiliaryStatus || {});
   if (model.state === 'downloaded' && aux.every((s) => s === 'downloaded')) return { ready: true, tone: 'ok', label: 'Ready' };
