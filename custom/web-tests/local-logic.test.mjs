@@ -55,7 +55,8 @@ test('describeJob: queued, arbiter wait on the V100, model load, sampling, decod
   assert.equal(describeJob({ status: 'running' }, { device: 'v100', elapsedMs: 120_000 }).text, 'Loading model…');
   assert.equal(describeJob({ status: 'running' }, { device: 'gtx1080', elapsedMs: 1000 }).text, 'Loading model…');
   assert.deepEqual(describeJob({ status: 'running', progress: { step: 3, totalSteps: 8, progress: 0.375 } }), { text: 'Step 3/8', pct: 38 });
-  assert.deepEqual(describeJob({ status: 'running', progress: { step: 8, totalSteps: 8, progress: 1 } }, { kind: 'video' }), { text: 'Decoding video…', pct: 100 });
+  assert.deepEqual(describeJob({ status: 'running', progress: { step: 8, totalSteps: 8, progress: 1 } }, { kind: 'video' }), { text: 'Processing frames…', pct: 100 });   // Wan runs several stages (encode, high noise, low noise): the end of one is not the end of the job
+  assert.deepEqual(describeJob({ status: 'running', progress: { step: 20, totalSteps: 20, progress: 1 } }, { kind: 'image' }), { text: 'Decoding image…', pct: 100 });
 });
 
 test('history: newest first, deduped by id, capped', () => {

@@ -25,5 +25,6 @@
   <Requires/>
   <Config Name="WebUI Port" Target="3000" Default="3002" Mode="tcp" Description="Next.js web UI" Type="Port" Display="always" Required="true" Mask="false">3002</Config>
   <Config Name="AppData" Target="/data" Default="/mnt/user/appdata/open-generative-ai" Mode="rw" Description="Persistent data: sync log/state, local-provider config and job outputs" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/open-generative-ai</Config>
+  <Config Name="Local inference URL" Target="OGAI_LOCAL_URL" Default="" Mode="" Description="Base URL of the ogai-local service (e.g. http://HOST:8790). Enables the Local switch in the Image/Video studios and Settings -> Local models; empty = feature hidden. The token is read from AppData/.mcp-token." Type="Variable" Display="always" Required="false" Mask="false"></Config>
   <Config Name="Node Environment" Target="NODE_ENV" Default="production" Mode="" Description="Node execution environment" Type="Variable" Display="advanced" Required="false" Mask="false">production</Config>
 </Container>

@@ -73,7 +73,7 @@ export function describeJob(job, { device, elapsedMs = 0, kind = 'image' } = {})
   if (job.status === 'queued') return { text: 'Queued behind another local job…', pct: null };
   const p = job.progress;
   if (p && p.totalSteps) {
-    if (p.step >= p.totalSteps) return { text: kind === 'video' ? 'Decoding video…' : 'Decoding image…', pct: 100 };
+    if (p.step >= p.totalSteps) return { text: kind === 'video' ? 'Processing frames…' : 'Decoding image…', pct: 100 };
     return { text: `Step ${p.step}/${p.totalSteps}`, pct: Math.round((p.progress ?? p.step / p.totalSteps) * 100) };
   }
   if (device === 'v100' && elapsedMs < 90_000) return { text: 'Waiting for the GPU arbiter — the Hermes brain and TTS are being stopped…', pct: null };

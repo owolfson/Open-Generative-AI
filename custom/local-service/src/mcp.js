@@ -43,7 +43,7 @@ const LOCAL_TOOLS = [
   },
   {
     name: 'local_generate_video',
-    description: 'Image-to-video on the local V100 (Wan 2.2, avi output). Needs an input image: image_job_id (a finished local_generate_image job - this chains text -> image -> video) or image_base64 (PNG/JPEG). Runs through the GPU arbiter, which stops the Hermes brain and the TTS for the duration; the result url is served under /outputs.',
+    description: 'Image-to-video on the local V100 (Wan 2.2, ~6-8 min incl. model load; H.264 mp4 output, the raw avi is kept as result.source; 640x368, 33 frames = 2s at 16fps; quality mode only). Needs an input image: image_job_id (a finished local_generate_image job - this chains text -> image -> video) or image_base64 (PNG/JPEG). Runs through the GPU arbiter, which stops the Hermes brain and the TTS for the duration; the result url is served under /outputs.',
     inputSchema: {
       type: 'object',
       required: ['model', 'prompt'],

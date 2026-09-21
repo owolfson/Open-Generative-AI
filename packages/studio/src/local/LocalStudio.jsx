@@ -247,6 +247,20 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     } catch { /* ignore */ }
   }, [kind]);
 
+  // ...and when this studio is ALREADY mounted (the shell keeps every studio alive), the same hand-off arrives as an event.
+  useEffect(() => {
+    if (kind !== "video") return undefined;
+    const onAnimate = (e) => {
+      const { url, prompt: p } = e.detail || {};
+      if (!url) return;
+      try { window.sessionStorage.removeItem(VIDEO_SOURCE_KEY); } catch { /* ignore */ }
+      setSource({ url, label: "Selected image" });
+      if (p) setPrompt((cur) => cur || p);
+    };
+    window.addEventListener("ogai-local-animate", onAnimate);
+    return () => window.removeEventListener("ogai-local-animate", onAnimate);
+  }, [kind]);
+
   const finish = useCallback((done, meta) => {
     if (done.status === "cancelled") return;
     if (done.status !== "done" || !done.result) {
@@ -342,6 +356,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
     try { window.sessionStorage.setItem(VIDEO_SOURCE_KEY, JSON.stringify({ url: entry.url, prompt: entry.prompt })); } catch { /* ignore */ }
     setViewer(null);
     if (kind === "video") { setSource({ url: entry.url, label: "Selected image" }); return; }
+    window.dispatchEvent(new CustomEvent("ogai-local-animate", { detail: { url: entry.url, prompt: entry.prompt } }));
     window.dispatchEvent(new CustomEvent("ogai-local-navigate", { detail: { tab: "video" } }));
   };
 
