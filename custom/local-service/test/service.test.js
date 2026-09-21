@@ -138,3 +138,13 @@ test('sd-cli progress events from the stand-in land on the running job (this is 
   assert.equal(q.get(job.id).progress.step, 3);
   gate.resolve(); await q.wait(job.id, 1000);
 });
+
+test('per-model default parameters: Z-Image Base gets cfg 5 (upstream\'s 7.5 burns it out to a blank white image; sd.cpp docs use 5), explicit values and other models are untouched', () => {
+  const q = new JobQueue({ run: async () => ({}) });
+  const svc = createService({ standin, queue: q });
+  const std = (params) => svc.submitGeneration(params).params;
+  assert.equal(std({ model: 'z-image-base', prompt: 'x' }).guidance_scale, 5);
+  assert.equal(std({ model: 'z-image-base', prompt: 'x', guidance_scale: 3 }).guidance_scale, 3);
+  assert.equal(std({ model: 'z-image-base', prompt: 'x', guidance_scale: null }).guidance_scale, 5, 'null/empty count as omitted');
+  assert.equal(std({ model: 'z-image-turbo', prompt: 'x' }).guidance_scale, undefined, 'models without an override keep upstream defaults');
+});

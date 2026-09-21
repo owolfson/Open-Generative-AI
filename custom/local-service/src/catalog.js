@@ -43,4 +43,10 @@ function annotate(models) {
 
 const staticCatalog = () => ENTRIES.map((e) => ({ ...e }));
 
-module.exports = { assess, annotate, staticCatalog, EXCLUDED };
+// Request defaults that differ from upstream's catalog because upstream's value was measured to break with this sd.cpp build.
+// Z-Image Base: upstream asks for cfg 7.5 (50 steps, euler) which produced a solid white 1024x1024 on the V100; sd.cpp's docs use 5.0.
+const DEFAULT_PARAMS = { 'z-image-base': { guidance_scale: 5 } };
+const defaultParams = (id) => ({ ...(DEFAULT_PARAMS[id] || {}) });
+
+module.exports = {
+  defaultParams, assess, annotate, staticCatalog, EXCLUDED };

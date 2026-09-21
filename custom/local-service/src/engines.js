@@ -1,6 +1,7 @@
 'use strict';
 const path = require('node:path');
 const { createStandin } = require('./standin');
+const { installSdCliCompat } = require('./sdcli-compat');
 
 // Upstream modules destructure require('electron') once at load, so a second load in the same
 // process would keep talking to the first stand-in. Drop them from the cache before loading.
@@ -18,6 +19,7 @@ function loadEngines({ upstreamDir, userDataPath, resourcesPath, wan2gp = 'upstr
   const libDir = path.join(upstreamDir, 'electron', 'lib');
   const standin = createStandin({ userDataPath, isPackaged: Boolean(resourcesPath), resourcesPath });
   purgeEngineCache(libDir);
+  installSdCliCompat();   // must precede the require below: upstream destructures spawn once at load
   require(path.join(libDir, 'localInference.js')).register();
   if (wan2gp === 'upstream') require(path.join(libDir, 'wan2gpProvider.js')).register();
   return standin;
