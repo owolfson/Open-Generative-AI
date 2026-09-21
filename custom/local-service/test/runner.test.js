@@ -457,6 +457,7 @@ test('renewal: when the next job no longer fits the remaining window, the NEW le
   const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], leaseMinSeconds: 0, leaseLingerMs: 10_000 });   // window = the one job's estimate (900s), so job 2 (900s) cannot fit what is left of it
   const r = createRunner({ config: cfg, standin, acquireImpl: g.acquire, sdcli: fakeSdcli(), log: quiet });
   await r.run(job({ id: 'j1', params: fluxJob() }), ctx());
+  await new Promise((res) => setTimeout(res, 15));   // time must pass, or 'fits the remaining window' is true in the same millisecond
   await r.run(job({ id: 'j2', params: fluxJob() }), ctx());
   assert.deepEqual(g.events.map((e) => e.replace(/\(lease-\d+\)|\(\d+\)/, '')), ['acquire#1', 'acquire#2', 'release'], 'acquire #2 goes out before the old lease is released');
   await r.shutdown();
@@ -469,7 +470,31 @@ test('renewal still ends cleanly when the arbiter refuses the new lease: the job
   const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], leaseMinSeconds: 0, leaseLingerMs: 10_000 });
   const r = createRunner({ config: cfg, standin, acquireImpl: acquire, sdcli: fakeSdcli(), log: quiet });
   await r.run(job({ id: 'j1', params: fluxJob() }), ctx());
+  await new Promise((res) => setTimeout(res, 15));   // time must pass, or 'fits the remaining window' is true in the same millisecond
   await assert.rejects(() => r.run(job({ id: 'j2', params: fluxJob() }), ctx()), { code: 'ARBITER_REFUSED' });
   await r.shutdown();
   assert.equal(released.length, 1, 'the old lease was released exactly once and nothing else is held');
+});
+
+test('BATTLE-FOUND BUG: a queued V100 job that does not fit the remaining window must NOT make the finishing job release the lease (the arbiter would start restoring the brain, and the next acquire would kill it mid-load); it is handed the lease instead', async () => {
+  const { standin } = fakes(); const g = eventGate();
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], leaseMinSeconds: 0, leaseLingerMs: 0 });
+  const r = createRunner({ config: cfg, standin, acquireImpl: g.acquire, sdcli: fakeSdcli(), log: quiet });
+  const next = { id: 'j2', route: 'sdcpp', params: fluxJob() };
+  let seen = 0;   // j2 is submitted AFTER j1 started (the real order): invisible when j1 sizes its lease, queued when j1 finishes
+  await r.run(job({ id: 'j1', params: fluxJob() }), { signal: new AbortController().signal, pending: () => (seen++ === 0 ? [] : [next]) });
+  assert.equal(g.events.filter((e) => e.startsWith('release')).length, 0, 'the lease is still held after j1: nothing was released');
+  await new Promise((res) => setTimeout(res, 15));   // time must pass, or 'fits the remaining window' is true in the same millisecond
+  await r.run(job({ id: 'j2', params: fluxJob() }), ctx());
+  assert.deepEqual(g.events.map((e) => e.replace(/\(lease-\d+\)|\(\d+\)/, '')), ['acquire#1', 'acquire#2', 'release'], 'j2 renewed by handover: the replacement was requested before the old lease was released');
+  await r.shutdown();
+});
+
+test('a queued job that is NOT a V100 job (or would fail anyway) still ends the batch: the card is given back before it', async () => {
+  const { standin, gate } = fakes();
+  const cfg = config({ modelDirs: [modelDir(FLUX_FILES)], leaseMinSeconds: 0, leaseLingerMs: 0 });
+  const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: fakeSdcli(), log: quiet });
+  const on1080 = { id: 'j2', route: 'sdcpp', params: { model: 'z-image-turbo', prompt: 'x', device: 'gtx1080' } };
+  await r.run(job({ id: 'j1', params: fluxJob() }), { signal: new AbortController().signal, pending: () => [on1080] });
+  assert.equal(gate.releases, 1, 'released: the next job is on the GTX 1080');
 });

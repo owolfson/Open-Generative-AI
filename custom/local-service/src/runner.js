@@ -152,8 +152,8 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
 
   /**
    * After a job (success OR failure - sd-cli's exit frees its VRAM either way):
-   * - the next queued job is covered by this lease -> keep it (safety timer in case that job never starts);
-   * - a next job is queued but not covered (a 1080 job, or a bigger one) -> give the card back now;
+   * - the next queued job is a V100 job -> keep the lease (it runs under it, or renews it by handover; safety timer in case it never starts);
+   * - the next queued job does not need the V100 (a 1080 job, or one that will fail anyway) -> give the card back now;
    * - nothing queued -> linger briefly. The arbiter restores the brain the instant a lease is released, so a follow-up submitted seconds
    *   later would otherwise interrupt that cold load and pay a whole evict/restore cycle. leaseLingerMs=0 releases immediately.
    */
@@ -161,8 +161,9 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     if (!held) return;
     const next = pending[0];
     if (next) {
-      const need = needOf(next);
-      if (need && covers(need)) { armTimer(idleReleaseMs); return; }
+      // Any queued V100 job keeps the lease: if it fits the remaining window it simply runs, if not ensureLease() renews by handover.
+      // Releasing here on a time shortfall is what let the arbiter start restoring the brain just before the next acquire killed it (found in battle).
+      if (needOf(next)) { armTimer(idleReleaseMs); return; }
       await dropLease();
       return;
     }
