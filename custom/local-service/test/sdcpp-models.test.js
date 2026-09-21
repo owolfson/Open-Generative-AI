@@ -141,3 +141,11 @@ test('guidance_scale (upstream naming) is accepted as cfg_scale', () => {
   assert.equal(prepare(getSpec('wan2gp:qwen-image'), { prompt: 'x', guidance_scale: 4 }).cfg_scale, 4);
   assert.equal(prepare(getSpec('wan2gp:qwen-image'), { prompt: 'x', guidance_scale: 4, cfg_scale: 3 }).cfg_scale, 3);
 });
+
+test('every extended model decodes with --vae-tiling (measured: the untiled VAE decode adds 6-7GB and pushed Qwen-Image to 31.9GB of the 32GB V100)', () => {
+  for (const id of ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v']) {
+    const spec = getSpec(id);
+    const args = buildArgs(spec, prepare(spec, { prompt: 'x', init_image: '/i.png', seed: 1 }), { diffusion: '/d', vae: '/v', clip_l: '/c', t5xxl: '/t', llm: '/l', high_noise: '/h', lora_low: '/a/low.safetensors', lora_high: '/a/high.safetensors' }, '/o');
+    assert.ok(args.includes('--vae-tiling'), id);
+  }
+});

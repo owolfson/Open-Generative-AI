@@ -18,14 +18,14 @@ const SPECS = {
     defaults: () => ({ width: 1024, height: 1024, steps: 20, cfg_scale: 1 }),
     // No --clip-on-cpu: this host has no F16C, so fp16 text encoding on the CPU is very slow. The V100 has room for T5 on the GPU.
     build: (p, f) => ['--diffusion-model', f.diffusion, '--vae', f.vae, '--clip_l', f.clip_l, '--t5xxl', f.t5xxl,
-      '--sampling-method', 'euler', '--diffusion-fa', ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
+      '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
   },
   'wan2gp:qwen-image': {
     id: 'wan2gp:qwen-image', kind: 'image', ext: 'png', vramGb: 24,
     files: { diffusion: 'qwen-image-2512-Q6_K.gguf', vae: 'qwen_image_vae.safetensors', llm: 'qwen_2.5_vl_7b_fp8_scaled.safetensors' },
     defaults: () => ({ width: 1024, height: 1024, steps: 20, cfg_scale: 2.5, flow_shift: 3 }),
     build: (p, f) => ['--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm,
-      '--sampling-method', 'euler', '--diffusion-fa', '--flow-shift', str(p.flow_shift), ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
+      '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', '--flow-shift', str(p.flow_shift), ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
   },
   'wan2gp:wan22-i2v': {
     id: 'wan2gp:wan22-i2v', kind: 'video', ext: 'avi', vramGb: 27, needsImage: true,
@@ -45,6 +45,7 @@ const SPECS = {
       '--high-noise-steps', str(p.high_noise_steps), '-n', p.negative_prompt || NEG_WAN, '--diffusion-fa',
       '--video-frames', str(p.video_frames), '--fps', str(p.fps), '--flow-shift', str(p.flow_shift), '-i', p.init_image,
       '--offload-to-cpu',   // measured on the V100: without it the 3D-VAE decode runs out of memory
+      '--vae-tiling',       // sd.cpp's own Wan recipe pairs it with --offload-to-cpu
       ...(p.fast ? ['--lora-model-dir', path.dirname(f.lora_low)] : [])],   // both lightx2v LoRAs live in the same directory
   },
 };

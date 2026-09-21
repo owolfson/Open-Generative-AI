@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { proxyUrl, modelReadiness, pickerModels, resolveDevice, buildParams, describeJob, pushHistory, explainError, formatDuration, needsV100 } from '../../packages/studio/src/local/localLogic.js';
+import { entryFromJob, mergeServerJobs, proxyUrl, modelReadiness, pickerModels, resolveDevice, buildParams, describeJob, pushHistory, explainError, formatDuration, needsV100 } from '../../packages/studio/src/local/localLogic.js';
 
 const flux = { id: 'wan2gp:flux-dev', name: 'Flux.1 Dev', kind: 'image', route: 'sdcpp', star: true, weightsGb: 21.6, filesPresent: true };
 const zimage = { id: 'z-image-turbo', name: 'Z-Image Turbo', kind: 'image', route: 'sdcpp', star: true, weightsGb: 4.9, state: 'downloaded', auxiliaryStatus: { llm: 'downloaded', vae: 'downloaded' } };
@@ -70,4 +70,19 @@ test('error messages and durations are human readable', () => {
   assert.equal(explainError({ code: 'WEIRD', message: 'raw message' }), 'raw message');
   assert.equal(explainError(null), 'Local generation failed.');
   assert.deepEqual([formatDuration(4200), formatDuration(65_000), formatDuration(600_000)], ['4s', '1m 05s', '10m 00s']);
+});
+
+const doneJob = (over = {}) => ({ id: 'j1', kind: 'image', status: 'done', startedAt: 1000, finishedAt: 5000, params: { model: 'wan2gp:flux-dev', prompt: 'a lighthouse', device: 'v100', aspect_ratio: '1:1' }, result: { url: '/outputs/j1.png', seed: 7 }, ...over });
+
+test('entryFromJob turns a finished server job (from the GUI, an agent or MCP) into a history entry', () => {
+  assert.deepEqual(entryFromJob(doneJob(), [flux]), { id: 'j1', kind: 'image', url: '/api/local/outputs/j1.png', prompt: 'a lighthouse', model: 'wan2gp:flux-dev', modelName: 'Flux.1 Dev', device: 'v100', aspect: '1:1', seed: 7, seconds: 4, createdAt: 5000 });
+  assert.equal(entryFromJob(doneJob({ params: { model: 'mystery', prompt: 'x' } }), [flux]).modelName, 'mystery');
+  for (const j of [null, doneJob({ status: 'error' }), doneJob({ status: 'running' }), doneJob({ result: null }), doneJob({ result: {} })]) assert.equal(entryFromJob(j, [flux]), null);
+});
+
+test('mergeServerJobs adds unseen finished jobs oldest-first (so the newest ends on top), never re-adds dismissed ones or duplicates', () => {
+  const jobs = [doneJob({ id: 'a', finishedAt: 100 }), doneJob({ id: 'b', finishedAt: 300 }), doneJob({ id: 'c', finishedAt: 200 }), doneJob({ id: 'd', status: 'error' }), doneJob({ id: 'gone', finishedAt: 50 })];
+  const merged = mergeServerJobs([{ id: 'a' }], jobs, [flux], new Set(['gone']));
+  assert.deepEqual(merged.map((e) => e.id), ['b', 'c', 'a']);
+  assert.equal(mergeServerJobs(merged, jobs, [flux], new Set(['gone'])), merged, 'nothing new: the same list comes back (no needless writes)');
 });
