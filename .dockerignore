@@ -9,3 +9,4 @@ docs
 *.png
 .env
 .env.*
+custom/local-service/vendor
