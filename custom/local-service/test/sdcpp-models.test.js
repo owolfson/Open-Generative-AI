@@ -214,3 +214,16 @@ test('LTX-2.3 HARD LIMITS from the host-crash history (720p and >5s crashed this
   }
   for (const ok of [{ width: 960, height: 544, video_frames: 121 }, { width: 640, height: 352, video_frames: 33 }, { width: 544, height: 960, video_frames: 97 }]) assert.doesNotThrow(() => prepare(spec, { prompt: 'x', ...ok }), JSON.stringify(ok));
 });
+
+// ---------- Z-Image Base: our own spec with the Q8_0 quant (the upstream Q4_K_M renders a solid white image on this hardware) ----------
+const ZB_FILES = { diffusion: '/m/z-image-Q8_0.gguf', llm: '/m/Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf', vae: '/m/ae.safetensors' };
+
+test('Z-Image Base is served by our spec with the Q8_0 GGUF (Q4_K_M produced blank white images: measured on the 1080 and the V100, every sampler/cfg tried)', () => {
+  const spec = getSpec('wan2gp:z-image-base') || getSpec('z-image-base');
+  assert.ok(spec, 'spec exists'); assert.equal(spec.kind, 'image'); assert.equal(spec.ext, 'png');
+  assert.deepEqual(Object.values(spec.files).sort(), ['Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf', 'ae.safetensors', 'z-image-Q8_0.gguf']);
+  const args = buildArgs(spec, prepare(spec, { prompt: 'a red apple', seed: 4 }), ZB_FILES, '/o.png');
+  assert.ok(pair(args, '--diffusion-model', ZB_FILES.diffusion)); assert.ok(pair(args, '--llm', ZB_FILES.llm)); assert.ok(pair(args, '--vae', ZB_FILES.vae));
+  assert.ok(pair(args, '--cfg-scale', 5)); assert.ok(pair(args, '--steps', 30)); assert.ok(pair(args, '--sampling-method', 'euler')); assert.ok(args.includes('--diffusion-fa'));
+  assert.ok(pair(args, '-W', 1024)); assert.ok(pair(args, '-H', 1024));
+});

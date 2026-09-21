@@ -8,7 +8,7 @@ const WAN = 'wangp';
 
 const ENTRIES = [
   { id: 'z-image-turbo', name: 'Z-Image Turbo', kind: 'image', route: SD, v100: 'recommended', star: true, evidence: 'proven', provenOn: ['gtx1080'], weightsGb: 5.2, note: 'Measured 2026-09-20 on the GTX 1080 lane: 1024x1024, 8 steps, 204s, 7.5GB peak on the card including the resident TTS container. Best quality for the effort.' },
-  { id: 'z-image-base', name: 'Z-Image Base', kind: 'image', route: SD, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 6.2, note: '50-step quality; same weights class as Turbo.' },
+  { id: 'z-image-base', name: 'Z-Image Base', kind: 'image', route: SD, v100: 'recommended', star: true, evidence: 'untested', provenOn: [], weightsGb: 7.2, note: 'Served from our own spec with the Q8_0 GGUF: upstream\'s Q4_K_M renders a solid white image on this hardware (measured on the GTX 1080 and V100). 30 steps, cfg 5, 1024x1024. Not yet proven at full size.' },
   { id: 'stable-diffusion-xl-base', name: 'SDXL Base 1.0', kind: 'image', route: SD, v100: 'supported', star: false, evidence: 'untested', provenOn: [], weightsGb: 6.9, note: 'Runs, but older than Z-Image/Flux/Qwen.' },
   { id: 'dreamshaper-8', name: 'Dreamshaper 8', kind: 'image', route: SD, v100: 'supported', star: false, evidence: 'proven', provenOn: ['gtx1080'], weightsGb: 2.1, note: 'Measured 2026-09-20 on the GTX 1080 lane: 512x512, 20 steps, 44s including model load, 8.0GB peak on the card (tight beside the TTS container).' },
   { id: 'realistic-vision-v51', name: 'Realistic Vision v5.1', kind: 'image', route: SD, v100: 'supported', star: false, evidence: 'proven', provenOn: ['gtx1080'], weightsGb: 2.1, note: 'SD 1.5 photorealistic. Proven on the GTX 1080 at 512x512 (2026-09-21, ~50s). Sizes above ~512x512 (e.g. 3:4 = 512x768) run out of memory in the VAE decode on the 8GB card beside the resident TTS model: use 1:1 there, or the V100.' },
@@ -43,10 +43,4 @@ function annotate(models) {
 
 const staticCatalog = () => ENTRIES.map((e) => ({ ...e }));
 
-// Request defaults that differ from upstream's catalog because upstream's value was measured to break with this sd.cpp build.
-// Z-Image Base: upstream asks for cfg 7.5 (50 steps, euler) which produced a solid white 1024x1024 on the V100; sd.cpp's docs use 5.0.
-const DEFAULT_PARAMS = { 'z-image-base': { guidance_scale: 5 } };
-const defaultParams = (id) => ({ ...(DEFAULT_PARAMS[id] || {}) });
-
-module.exports = {
-  defaultParams, assess, annotate, staticCatalog, EXCLUDED };
+module.exports = { assess, annotate, staticCatalog, EXCLUDED };

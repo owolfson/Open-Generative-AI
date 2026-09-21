@@ -47,6 +47,15 @@ function ltxCheck(p) {
 }
 
 const SPECS = {
+  'z-image-base': {
+    // Upstream serves this with the Q4_K_M GGUF, which renders a SOLID WHITE image here (the job even reports "done"): reproduced on the GTX 1080 and the
+    // V100, with cfg 1/5/7.5, euler/default sampler, with/without flash attention and the simple scheduler, and the file is byte-identical to Hugging Face's.
+    // The Q8_0 quant of the same model renders correctly, so Z-Image Base is served from OUR spec with Q8_0 (7.2GB; 50 steps is slow, 30 is the default).
+    id: 'z-image-base', kind: 'image', ext: 'png', vramGb: 14,
+    files: { diffusion: 'z-image-Q8_0.gguf', llm: 'Qwen3-4B-Instruct-2507-UD-Q4_K_XL.gguf', vae: 'ae.safetensors' },
+    defaults: () => ({ width: 1024, height: 1024, steps: 30, cfg_scale: 5 }),
+    build: (p, f) => ['--diffusion-model', f.diffusion, '--llm', f.llm, '--vae', f.vae, '--sampling-method', 'euler', '--diffusion-fa', ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
+  },
   'wan2gp:flux-dev': {
     id: 'wan2gp:flux-dev', kind: 'image', ext: 'png', vramGb: 29,   // measured peak 28.8GB (1024x1024: 22.8GB while sampling, +6GB in the VAE decode)
     files: { diffusion: 'flux1-dev-Q8_0.gguf', vae: 'ae.sft.safetensors', clip_l: 'clip_l.safetensors', t5xxl: 't5xxl_fp16.safetensors' },

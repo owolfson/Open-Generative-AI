@@ -28,8 +28,7 @@ function createService({ standin, queue, config }) {
     const meta = catalog.assess(params && params.model);
     if (!meta) throw failure('UNKNOWN_MODEL', `unknown or excluded model: ${params && params.model}`, 400);
     if (typeof params.prompt !== 'string' || !params.prompt) throw failure('BAD_REQUEST', 'prompt is required', 400);
-    const given = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
-    return queue.submit({ kind: meta.kind, route: meta.route, params: resolveInputImage(getSpec(params.model), { ...catalog.defaultParams(params.model), ...given }) });
+    return queue.submit({ kind: meta.kind, route: meta.route, params: resolveInputImage(getSpec(params.model), params) });
   }
 
   // A caller may reference an earlier job's image or upload one, but can NEVER name a server path: init_image is stripped

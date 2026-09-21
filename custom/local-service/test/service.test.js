@@ -41,7 +41,7 @@ test('catalogPayload annotates upstream sd.cpp models, flags unknown ones, adds 
   assert.equal(byId.mystery.v100, 'unknown');
   assert.equal(byId['wan2gp:wan22-t2v'].route, 'sdcpp');   // text-to-video is served by sd.cpp now (Wan T2V + HunyuanVideo 1.5)
   // upstream-served sd.cpp models appear only if the engine listed them; the extended ones (own specs) are always known
-  assert.deepEqual(models.filter((m) => m.route === 'sdcpp').map((m) => m.id).sort(), ['wan2gp:flux-dev', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'z-image-turbo']);
+  assert.deepEqual(models.filter((m) => m.route === 'sdcpp').map((m) => m.id).sort(), ['wan2gp:flux-dev', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'z-image-base', 'z-image-turbo']);
   assert.ok(excluded.some((e) => e.id === 'ltx-2.3-22b'));
 });
 
@@ -137,14 +137,4 @@ test('sd-cli progress events from the stand-in land on the running job (this is 
   events.emit('send', 'local-ai:progress', { step: 3, totalSteps: 8, progress: 0.375, status: 'sampling' });
   assert.equal(q.get(job.id).progress.step, 3);
   gate.resolve(); await q.wait(job.id, 1000);
-});
-
-test('per-model default parameters: Z-Image Base gets cfg 5 (upstream\'s 7.5 burns it out to a blank white image; sd.cpp docs use 5), explicit values and other models are untouched', () => {
-  const q = new JobQueue({ run: async () => ({}) });
-  const svc = createService({ standin, queue: q });
-  const std = (params) => svc.submitGeneration(params).params;
-  assert.equal(std({ model: 'z-image-base', prompt: 'x' }).guidance_scale, 5);
-  assert.equal(std({ model: 'z-image-base', prompt: 'x', guidance_scale: 3 }).guidance_scale, 3);
-  assert.equal(std({ model: 'z-image-base', prompt: 'x', guidance_scale: null }).guidance_scale, 5, 'null/empty count as omitted');
-  assert.equal(std({ model: 'z-image-turbo', prompt: 'x' }).guidance_scale, undefined, 'models without an override keep upstream defaults');
 });

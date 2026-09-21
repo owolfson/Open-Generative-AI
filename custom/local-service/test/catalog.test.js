@@ -62,9 +62,3 @@ test('excluded list documents the LTX 22B and FP4/Nunchaku exclusions and is nev
   for (const id of ids) assert.equal(catalog.assess(id), undefined);
   for (const e of catalog.EXCLUDED) assert.ok(e.reason.length > 10);
 });
-
-test('defaultParams: only models with a measured override have one', () => {
-  assert.deepEqual(catalog.defaultParams('z-image-base'), { guidance_scale: 5 });
-  assert.deepEqual(catalog.defaultParams('z-image-turbo'), {});
-  assert.deepEqual(catalog.defaultParams('nope'), {});
-});
