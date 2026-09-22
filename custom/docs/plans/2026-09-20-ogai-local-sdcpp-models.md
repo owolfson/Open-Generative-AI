@@ -110,6 +110,38 @@ Downloads (SHA-256 verified against Hugging Face's LFS hashes; `custom/local-ser
 
 **Compat shims** (`src/sdcli-compat.js`, installed before upstream's engine loads, so upstream files stay untouched): sampler respelling (`dpmpp*` -> `dpm++*`) and dropping the removed `--sd-version` / `--flux` flags.
 
+## Results, part 4 - battle test (2026-09-21/22)
+
+Full stack: `api_battle.py` 84/84 (72 no-GPU + 12 real GTX 1080-lane: single-flight, FIFO, cancel, sd-cli-crash recovery), unit suite
+161/161, web proxy/GUI tests 20/20, a 7-scenario GUI battle through a real Chromium 22/22 (see `battle/README.md` for the full list and the
+recipe), two V100 sessions with a watcher + abort guard, and `hermes_probe.py` functional recovery (real chat completion, real TTS
+synthesis, arbiter idle, V100 back at baseline, no orphaned sd-cli) 6/6 after each. Real outputs were opened and looked at, not just
+trusted from job status - a Z-Image Turbo lighthouse, a cabin, a mountain village, and three extracted frames of the LTX fox video all
+matched their prompts.
+
+**TTS restart mid-V100-lease (real incident, fixed).** `speaches-chatterbox` came back onto the V100 mid-lease during an earlier session:
+the host's "Speaches 1080 Guard" cron only trusted the arbiter's `/gpu/ambient_safe`, which answered `safe: true` because ogai-local (a
+job-scoped consumer whose container is always up) is deliberately invisible to the "is some persistent holder still running" check that
+endpoint used - see `custom/local-service/README.md`'s GPU arbiter registration section, point 4. Fixed by also answering `safe: false`
+while a lease is held or queued. Verified 3 separate times (`battle/guard_kill_test.py` part A): a real Guard tick lands inside the lease,
+logs the deferral, and TTS is never observed running while the lease is held.
+
+**Crash recovery mid-V100-lease (real incident, fixed, and the simulation itself needed fixing).** Getting an uncontrolled-crash test to
+mean anything took three tries - see `battle/README.md`'s writeup of why `docker kill` and `docker exec ... kill -9 1` both silently fail
+to reproduce a real crash, and why only a host-pid-namespace kill does. Once corrected: `RestartCount` genuinely increments, the restarted
+service's own boot-time `releaseStaleLeaseWithRetry` (added this session - the original was a single 10s attempt against an arbiter that
+answers nothing while it stops/starts containers) hands the lease back, and Hermes/TTS recover fully. Along the way found and fixed a real
+observability gap in that same code: a 2xx response whose body raced the client's read (plausible exactly when the arbiter is mid-restore)
+was silently read as "not the holder" instead of "unanswered, retry" - the release still worked (the arbiter is the source of truth), but
+our own log never showed it. Fixed and covered by two new mocked tests reproducing the exact race (`test/gate.test.js`).
+
+**GUI gap found by the same battle (fixed).** A `docker restart` mid-job left the page stuck on a stale "local inference service is not
+reachable" - `waitForJob` gave up after ~5s of failed polls, well before a ~45s restart completes. Fixed to ride out ~75s, and a 404 (jobs
+live in the service's memory, so a restart forgets them) is now reported as `JOB_LOST` with a plain explanation instead of a generic error.
+
+**Not yet exercised:** an OOM-triggered kernel-level crash (the host-pid kill covers "process dies unexpectedly," not "the kernel's OOM
+killer specifically"); a sustained multi-hour soak.
+
 ## Self-Review
 
 - Covers: Flux/Qwen/Wan via sd.cpp (T1-T3), the I2V input path and MCP tool (T4), the downtime cost lesson (T5), deploy (T6), evidence with abort rules (T7).
