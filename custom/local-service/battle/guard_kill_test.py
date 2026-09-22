@@ -4,8 +4,16 @@
 A. The host's Speaches 1080 Guard (cron every 5 min, starts speaches-chatterbox whenever the arbiter's /gpu/ambient_safe does not say
    "safe": false) must DEFER for the whole lease. The batch is timed to straddle a Guard tick; the tick must log a "lease held" skip and the
    TTS must never run while the lease is held.
-B. `docker kill -9` of the service in the middle of a V100 job (no SIGTERM handler runs): the restarted service must hand the dead
-   process's lease back at boot (hermes gets restored by the arbiter) - not leave it held until the arbiter's 2h hard expiry.
+B. An uncontrolled crash of the service in the middle of a V100 job: SIGKILL the container's PID 1 from the HOST's OWN pid namespace
+   (`kill -9 $(docker inspect -f '{{.State.Pid}}' ogai-local)`) - the only method that actually reproduces a real uncontrolled crash. Two
+   other methods were tried and both turned out NOT to: `docker kill` from the host is tracked by dockerd as an admin-intentional stop, so
+   `--restart unless-stopped` deliberately does not fire for it (confirmed empirically: the container sat exited for 2+ minutes; only the
+   arbiter's OWN Sept-1 stale-lease self-heal noticed and released the lease, not this service). `docker exec ogai-local kill -9 1` looked
+   right but silently no-ops: a PID namespace's init (PID 1) is immune to unhandled signals sent from WITHIN its own namespace - including
+   SIGKILL - and `docker exec` joins that namespace (`man 7 pid_namespaces`); the process never even received it. Only a signal sent from
+   truly outside the namespace (the host's own `kill`, bypassing both dockerd's stop-tracking and the kernel's immunity rule) reproduces
+   what a segfault/OOM/unhandled-exception crash actually looks like: `--restart unless-stopped` fires and the restarted service's OWN
+   boot-time `releaseStaleLeaseWithRetry` gets to run.
 
 Abort rules (cancel everything): V100 > 30.5GB, host RAM < 3GB, a job running > 20 min. Afterwards run hermes_probe.py --wait 900.
 """
@@ -98,25 +106,39 @@ while time.time() < deadline and not aborted and not run_id:
 if run_id:
     time.sleep(6)
     ok, holder = arb_lease()
-    say('kill -9 ogai-local (lease holder now:', holder, ')')
-    t_kill = time.time(); sh('docker kill --signal=KILL ogai-local')
+    host_pid = sh("docker inspect -f '{{.State.Pid}}' ogai-local")
+    rc0 = int(sh("docker inspect -f '{{.RestartCount}}' ogai-local") or 0)
+    say(f'kill -9 from the HOST pid namespace (container host pid {host_pid}, restart count {rc0}, lease holder now:', holder, ')')
+    t_kill = time.time(); sh(f'kill -9 {host_pid}')
+    restarted = False
+    while time.time() - t_kill < 60:
+        rc, status = sh("docker inspect -f '{{.RestartCount}} {{.State.Status}}' ogai-local").split()
+        if int(rc) > rc0 and status == 'running': restarted = True; break
+        time.sleep(1)
+    check('the crash triggered Docker\'s own restart policy (RestartCount incremented, no docker-kill/-stop involved)',
+          restarted, sh("docker inspect -f '{{.State.Status}} {{.State.ExitCode}} {{.RestartCount}}' ogai-local"))
     back = None
     while time.time() - t_kill < 90:
         try:
             if json.load(urllib.request.urlopen(SVC + '/health', timeout=3)).get('ok'): back = time.time() - t_kill; break
         except Exception: pass
         time.sleep(1)
-    check('service restarted by docker after kill -9', back is not None, f'{back and round(back, 1)}s')
+    check('service healthy again after the crash+restart', back is not None, f'{back and round(back, 1)}s')
     released = None
     while time.time() - t_kill < 240:
         answered, holder = arb_lease()
         if answered and holder is None: released = time.time() - t_kill; break
         time.sleep(2)
     check('the restarted service handed the dead process\'s lease back (arbiter lease None)', released is not None, f'{released and round(released, 1)}s after the kill')
-    log = sh('docker logs --since 6m ogai-local 2>&1 | grep -iE "stale|released a stale" | tail -3')
+    # --tail N is unreliable here: sd-cli's own very verbose per-tensor progress can flood past N lines within seconds of the fresh boot
+    # if something else queues a job right away, burying the one-line boot message. --since (a duration, anchored at the kill) is not.
+    since = f'{int(time.time() - t_kill) + 15}s'
+    log = sh(f'docker logs --since {since} ogai-local 2>&1 | grep -iE "stale|released a stale" | tail -3')
     say('service log:', log[:200])
-    arb_log = sh(f"docker logs --since {int(time.time() - t_kill) + 10}s gpu-arbiter 2>&1 | grep -E 'released lease|FORCE-RELEASING|treating as released' | tail -3")
-    check('released by the boot path, not by the arbiter\'s hard expiry', 'FORCE-RELEASING' not in arb_log and 'released lease' in arb_log, arb_log.replace('\n', ' | ')[:200])
+    arb_log = sh(f"docker logs --since {since} gpu-arbiter 2>&1 | grep -E 'released lease|FORCE-RELEASING|treating as released' | tail -3")
+    check('the RESTARTED SERVICE\'s own boot-time release freed the lease (not the arbiter\'s hard expiry or its stale-holder self-heal)',
+          'FORCE-RELEASING' not in arb_log and 'treating as released' not in arb_log and 'released lease' in arb_log, arb_log.replace('\n', ' | ')[:200])
+    check('the service\'s own log shows it released a stale lease at boot', 'released a stale' in log, log[:150])
     after = jobs()
     check('no phantom queued/running job after the restart', after is not None and not [j for j in after if j['status'] in ('queued', 'running')], [j['status'] for j in (after or [])][-4:])
     time.sleep(8)

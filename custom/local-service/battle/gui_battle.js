@@ -26,7 +26,13 @@ const docker = (method, path) => new Promise((resolve, reject) => {
   const req = require('http').request({ socketPath: '/var/run/docker.sock', path, method }, (res) => { let b = ''; res.on('data', (d) => (b += d)); res.on('end', () => resolve({ status: res.statusCode, body: b })); });
   req.on('error', reject); req.setTimeout(120000, () => req.destroy(new Error('docker api timeout'))); req.end();
 });
-const sdCliRunning = async () => { const r = await docker('GET', '/containers/ogai-local/top?ps_args=-o%20comm'); return r.status === 200 ? (JSON.parse(r.body).Processes || []).flat().filter((c) => /sd-cli/.test(c)).length : -1; };
+const sdCliRunning = async () => {
+  const r = await docker('GET', '/containers/ogai-local/top');
+  if (r.status !== 200) return -1;
+  const { Titles, Processes } = JSON.parse(r.body);
+  const cmdIdx = Titles.indexOf('CMD');
+  return (Processes || []).filter((row) => /sd-cli/.test(row[cmdIdx] || '')).length;
+};
 const want = (n) => !process.env.ONLY || process.env.ONLY.split(',').includes(String(n));
 const until = async (fn, secs, every = 1000) => { const t = Date.now(); while (Date.now() - t < secs * 1000) { const v = await fn(); if (v) return v; await sleep(every); } return null; };
 

@@ -9,9 +9,9 @@ async function post(url, body, fetchImpl, timeoutMs) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  let data = null;
-  try { data = await res.json(); } catch { /* non-JSON error body */ }
-  return { ok: res.ok, status: res.status, data };
+  let data = null; let bodyParsed = true;
+  try { data = await res.json(); } catch { bodyParsed = false; /* non-JSON error body, or a 2xx whose body didn't parse */ }
+  return { ok: res.ok, status: res.status, data, bodyParsed };
 }
 
 const MAX_EST_SECONDS = 14400;   // the arbiter rejects est_seconds above this
@@ -63,8 +63,17 @@ async function releaseStaleLease(cfg, { fetchImpl = fetch, log = console } = {})
   if (!cfg.arbiterUrl) return { released: false, reason: 'no arbiter configured' };
   try {
     const res = await post(`${cfg.arbiterUrl}/release`, { consumer: cfg.sdcppConsumer }, fetchImpl, 10_000);
-    const note = res.data?.note || '';
     if (!res.ok) { log.warn(`gate: stale-lease release got HTTP ${res.status}`); return { released: false, reason: `HTTP ${res.status}` }; }
+    if (!res.bodyParsed) {
+      // A 2xx whose body didn't parse is ambiguous, not a "no": the arbiter answers this while mid-restore (stopping/starting
+      // hermes-llm and speaches), which is exactly when a race on the response body is most likely. Found live (2026-09-21): the
+      // arbiter's own log showed a real "released lease ..." for the right consumer/duration right when this should have logged a
+      // success here, and it never did - only two earlier timeout failures. Treating it as unanswered (retry, don't give up) is the
+      // safe reading; the old code silently read it as "not the holder" and both dropped the retry AND never logged the release.
+      log.warn('gate: stale-lease release got an OK response with an unparseable body - retrying rather than assuming it failed');
+      return { released: false, reason: 'OK response, unparseable body' };
+    }
+    const note = res.data?.note || '';
     const released = /^released after/.test(note);
     if (released) log.warn(`gate: released a stale ${cfg.sdcppConsumer} lease left by a previous process (${note})`);
     return { released, reason: note, answered: true };

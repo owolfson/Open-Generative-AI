@@ -97,6 +97,27 @@ test('releaseStaleLease releases by consumer name at boot and never throws', asy
   assert.equal(down.released, false);
 });
 
+test('a 2xx with an unparseable body is read as unanswered, not as "not the holder" (found live: the arbiter released for real under load, but the response body raced the client\'s read)', async () => {
+  const { logs, log } = quiet();
+  const garbled = async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected end of JSON input'); } });
+  const out = await releaseStaleLease({ arbiterUrl: 'http://arbiter.test', sdcppConsumer: 'ogai-local' }, { fetchImpl: garbled, log });
+  assert.equal(out.released, false); assert.equal(out.answered, undefined); // unanswered -> releaseStaleLeaseWithRetry must retry, not give up
+  assert.ok(logs.warn.some((m) => /unparseable body/.test(m)));
+  assert.ok(!logs.warn.some((m) => /released a stale/.test(m))); // must not claim success it can't confirm either
+});
+
+test('releaseStaleLeaseWithRetry keeps retrying past an unparseable-body reply until a real answer arrives', async () => {
+  _boot.leaseRequested = false;
+  let n = 0;
+  const flaky = async () => {
+    n += 1;
+    if (n === 1) return { ok: true, status: 200, json: async () => { throw new SyntaxError('bad json'); } };
+    return { ok: true, status: 200, json: async () => ({ ok: true, note: 'released after 12.0s' }) };
+  };
+  const out = await releaseStaleLeaseWithRetry({ arbiterUrl: 'http://arbiter.test', sdcppConsumer: 'ogai-local' }, { fetchImpl: flaky, log: quiet().log, sleep: async () => {} });
+  assert.equal(n, 2); assert.equal(out.released, true);
+});
+
 test('boot-time release retries while the arbiter is busy, and stops at the first real reply', async () => {
   _boot.leaseRequested = false;
   const cfg = { arbiterUrl: 'http://arbiter.test', sdcppConsumer: 'ogai-local' };
