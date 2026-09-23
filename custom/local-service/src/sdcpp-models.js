@@ -117,7 +117,7 @@ const SPECS = {
       diffusion: 'Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
     },
-    defaults: WAN_DEFAULTS, limits: LIMITS_WAN,
+    defaults: WAN_DEFAULTS, limits: LIMITS_WAN, frameChoices: [17, 25, 33],   // at 16fps: 1.1s / 1.6s / 2.1s (33 is the measured VAE-decode ceiling)
     validate: WAN_VALIDATE,
     build: (p, f) => [...wanArgs(p, f), '-i', p.init_image],
   },
@@ -127,7 +127,7 @@ const SPECS = {
       diffusion: 'Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
     },
-    defaults: WAN_DEFAULTS, limits: LIMITS_WAN,
+    defaults: WAN_DEFAULTS, limits: LIMITS_WAN, frameChoices: [17, 25, 33],   // at 16fps: 1.1s / 1.6s / 2.1s
     validate: WAN_VALIDATE,
     build: (p, f) => wanArgs(p, f),
   },
@@ -136,7 +136,7 @@ const SPECS = {
     // glyph encoder (--t5xxl). 480p text-to-video, fp16. The text encoders' params live in host RAM (te=cpu), the diffusion model + VAE on the GPU.
     id: 'wan2gp:hunyuan-video', kind: 'video', ext: 'avi', vramGb: 28,   // provisional: measured on the V100, see the catalog note
     files: { diffusion: 'hunyuanvideo1.5_480p_t2v_fp16.safetensors', vae: 'hunyuanvideo15_vae_fp16.safetensors', llm: 'qwen_2.5_vl_7b_fp8_scaled.safetensors', t5xxl: 'byt5_small_glyphxl_fp16.safetensors' },
-    limits: { ...LIMITS_WAN, maxSteps: 60, why: 'measured at 640x368 x 33 frames, 30 steps' },
+    limits: { ...LIMITS_WAN, maxSteps: 60, why: 'measured at 640x368 x 33 frames, 30 steps' }, frameChoices: [17, 25, 33],   // at 24fps: 0.7s / 1.0s / 1.4s
     defaults: () => ({ width: 640, height: 368, steps: 30, cfg_scale: 6, video_frames: 33, fps: 24 }),
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm, '--t5xxl', f.t5xxl,
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
@@ -158,7 +158,7 @@ const SPECS = {
     },
     dims: LTX_DIMS,
     defaults: () => ({ width: 640, height: 352, steps: 8, cfg_scale: 1, video_frames: 49, fps: 24 }),
-    check: ltxCheck, limits: { maxSteps: 30 },
+    check: ltxCheck, limits: { maxSteps: 30 }, frameChoices: [33, 49, 97, 121],   // 8n+1 (LTX's VAE stride); at 24fps: 1.3s / 2.0s / 4.0s / 5.0s (121 is LTX_MAX_FRAMES)
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--audio-vae', f.audio_vae, '--llm', f.llm, '--embeddings-connectors', f.connectors,
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
       ...(p.init_image ? ['-i', p.init_image] : []), ...(p.negative_prompt ? ['-n', p.negative_prompt] : []),
@@ -167,6 +167,10 @@ const SPECS = {
 };
 
 const getSpec = (id) => SPECS[id];
+
+// Whether a spec can be chained into a "cinema" sequence (each segment after the first is seeded from the last frame of
+// the one before it): it needs to be a video model that takes an input image, same flag resolveInputImage already uses.
+const canChain = (spec) => Boolean(spec && spec.kind === 'video' && (spec.needsImage || spec.acceptsImage));
 
 function isFile(p) { try { return fs.statSync(p).isFile(); } catch { return false; } }
 
@@ -236,4 +240,4 @@ function buildArgs(spec, p, files, outPath) {
     '-W', str(p.width), '-H', str(p.height), '--cfg-scale', str(p.cfg_scale), ...spec.build(p, files), '-o', outPath];
 }
 
-module.exports = { SPECS, getSpec, resolveFiles, prepare, buildArgs, NEG_WAN };
+module.exports = { SPECS, getSpec, resolveFiles, prepare, buildArgs, canChain, NEG_WAN };

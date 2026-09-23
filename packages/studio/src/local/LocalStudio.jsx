@@ -21,6 +21,8 @@ import {
 import LocalToggle, { BoltIcon } from "./LocalToggle.jsx";
 import { cancelJob, listJobs, submitJob, urlToBase64, blobToBase64, waitForJob } from "./localClient.js";
 import {
+  CINEMA_MAX_SEGMENTS,
+  CINEMA_MIN_SEGMENTS,
   DEVICE_LABEL,
   V100_WARNING,
   aspectsFor,
@@ -40,7 +42,8 @@ import { dismissLocalEntry, readDismissed, readLocalHistory, useLocalHistory, us
 
 const PREFS_KEY = "ogai_local_prefs_v1";
 const VIDEO_SOURCE_KEY = "ogai_local_video_source";
-const FRAME_CHOICES = [17, 25, 33];   // 33 is the longest measured on the V100 (the 3D-VAE decode is what runs out of memory)
+const FALLBACK_FRAME_CHOICES = [17, 25, 33];   // used only if the server has not sent this model's own frameChoices (older service build)
+const FALLBACK_FPS = 16;
 
 const loadPrefs = () => { try { return JSON.parse(window.localStorage.getItem(PREFS_KEY) || "{}"); } catch { return {}; } };
 const savePrefs = (kind, patch) => {
@@ -187,7 +190,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
   const [modelId, setModelId] = useState(null);
   const [aspect, setAspect] = useState(kind === "video" ? "16:9" : "1:1");
   const [deviceChoice, setDeviceChoice] = useState("auto");
-  const [advanced, setAdvanced] = useState({ steps: "", guidance: "", seed: "", frames: 33 });
+  const [advanced, setAdvanced] = useState({ steps: "", guidance: "", seed: "", frames: 33, cinemaSegments: "" });
   const [source, setSource] = useState(null);          // video: { url, file?, label }
   const [open, setOpen] = useState(null);              // model | aspect | device | advanced | source
   const [active, setActive] = useState(null);          // the running job's tracking info
@@ -536,11 +539,27 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                       <>
                         <Field label="Frames">
                           <div className="flex gap-2 normal-case tracking-normal">
-                            {FRAME_CHOICES.map((f) => (
-                              <button key={f} type="button" onClick={() => setAdvanced((a) => ({ ...a, frames: f }))} className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-semibold border ${advanced.frames === f ? "border-[#22d3ee]/50 text-[#22d3ee] bg-[#22d3ee]/10" : "border-white/10 text-white/50"}`}>{f} · {(f / 16).toFixed(1)}s</button>
+                            {(model?.frameChoices || FALLBACK_FRAME_CHOICES).map((f) => (
+                              <button key={f} type="button" onClick={() => setAdvanced((a) => ({ ...a, frames: f }))} className={`flex-1 px-2 py-1.5 rounded-md text-[11px] font-semibold border ${advanced.frames === f ? "border-[#22d3ee]/50 text-[#22d3ee] bg-[#22d3ee]/10" : "border-white/10 text-white/50"}`}>{f} · {(f / (model?.fps || FALLBACK_FPS)).toFixed(1)}s</button>
                             ))}
                           </div>
                         </Field>
+                        {model?.chainable && (
+                          <Field label="Cinema (chain clips into a longer video)">
+                            <div className="flex items-center gap-2 normal-case tracking-normal">
+                              <input
+                                className={inputClass} inputMode="numeric" placeholder="off"
+                                value={advanced.cinemaSegments}
+                                onChange={(e) => setAdvanced((a) => ({ ...a, cinemaSegments: e.target.value }))}
+                              />
+                              <span className="text-[11px] text-white/40 shrink-0">
+                                {Number(advanced.cinemaSegments) >= CINEMA_MIN_SEGMENTS
+                                  ? `≈ ${(((advanced.frames || model.frameChoices?.[0] || 1) / (model.fps || FALLBACK_FPS)) * Number(advanced.cinemaSegments)).toFixed(1)}s total (${advanced.cinemaSegments} clips)`
+                                  : `segments, ${CINEMA_MIN_SEGMENTS}-${CINEMA_MAX_SEGMENTS} (each pays its own full render time)`}
+                              </span>
+                            </div>
+                          </Field>
+                        )}
                       </>
                     )}
                     <div className="grid grid-cols-2 gap-3">

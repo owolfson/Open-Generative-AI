@@ -15,7 +15,8 @@ function loadConfig(env = process.env) {
     leaseMinSeconds: Number(env.OGAI_LEASE_MIN_S === undefined ? 3600 : env.OGAI_LEASE_MIN_S),            // shortest lease window requested from the arbiter (its hard expiry is 2x this)
     leaseLingerMs: Number(env.OGAI_LEASE_LINGER_S === undefined ? 30 : env.OGAI_LEASE_LINGER_S) * 1000,   // hold the V100 lease this long after the queue empties (0 = release at once)
     maxPending: Number(env.OGAI_MAX_QUEUE || 25),                          // waiting jobs allowed before 429 QUEUE_FULL
-    jobTimeoutMs: Number(env.OGAI_JOB_TIMEOUT_S || 1800) * 1000,           // a job running longer than this is stopped (JOB_TIMEOUT)
+    jobTimeoutMs: Number(env.OGAI_JOB_TIMEOUT_S || 1800) * 1000,           // a job running longer than this is stopped (JOB_TIMEOUT); a cinema job gets this PER segment
+    cinemaMaxSegments: Number(env.OGAI_CINEMA_MAX_SEGMENTS || 8),          // chained "cinema" video: at most this many 5s-class clips stitched into one
     upstreamDir: env.OGAI_UPSTREAM_DIR || '/app',           // repo root that contains electron/lib
     resourcesPath: env.OGAI_RESOURCES_PATH || '',           // holds local-ai/<platform>-<arch>/bin/sd-cli
     token: env.OGAI_TOKEN || '',

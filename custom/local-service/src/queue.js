@@ -28,11 +28,13 @@ class JobQueue extends EventEmitter {
 
   get(id) { return this.jobs.get(id) || null; }
 
-  /** Latest sd-cli progress for the running job (single-flight: progress events always belong to it). Whitelisted fields only. */
-  setProgress({ step, totalSteps, progress, status } = {}) {
+  /** Latest sd-cli progress for the running job (single-flight: progress events always belong to it). Whitelisted fields only.
+   * segment/segments (1-based, only set by a "cinema" chained-video job) tell the caller which clip in the sequence this
+   * step belongs to. */
+  setProgress({ step, totalSteps, progress, status, segment, segments } = {}) {
     if (!this.current) return;
     const job = this.jobs.get(this.current.id);
-    job.progress = { step, totalSteps, progress, status };
+    job.progress = { step, totalSteps, progress, status, segment, segments };
     this.emit('update', job);
   }
 

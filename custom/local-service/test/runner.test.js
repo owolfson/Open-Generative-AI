@@ -498,3 +498,140 @@ test('a queued job that is NOT a V100 job (or would fail anyway) still ends the 
   await r.run(job({ id: 'j1', params: fluxJob() }), { signal: new AbortController().signal, pending: () => [on1080] });
   assert.equal(gate.releases, 1, 'released: the next job is on the GTX 1080');
 });
+
+// ---------- cinema: chain several of a model's own clips into one longer video ----------
+function cinemaFakes({ mp4Calls = [], lastFrameCalls = [], concatCalls = [], failAt = null } = {}) {
+  const { standin, gate } = fakes();
+  const sd = fakeSdcli('AVIBYTES');
+  const mp4Impl = async ({ ffmpeg, input, output }) => { mp4Calls.push({ ffmpeg, input, output }); fs.writeFileSync(output, 'MP4BYTES'); return output; };
+  const lastFrameImpl = async ({ ffmpeg, input, output }) => {
+    lastFrameCalls.push({ ffmpeg, input, output });
+    if (failAt === 'lastFrame') throw Object.assign(new Error('ffmpeg exploded'), { code: 'FFMPEG_FAILED' });
+    fs.writeFileSync(output, 'PNGBYTES'); return output;
+  };
+  const concatImpl = async ({ ffmpeg, inputs, output, tmpDir }) => {
+    concatCalls.push({ ffmpeg, inputs: inputs.map((i) => path.basename(i)), tmpDir });
+    if (failAt === 'concat') throw Object.assign(new Error('ffmpeg exploded'), { code: 'FFMPEG_FAILED' });
+    fs.writeFileSync(output, 'FINALMP4'); return output;
+  };
+  return { standin, gate, sd, mp4Impl, lastFrameImpl, concatImpl, mp4Calls, lastFrameCalls, concatCalls };
+}
+const cinemaJob = (over = {}) => job({ params: { model: 'wan2gp:wan22-i2v', prompt: 'a fox trots', device: 'v100', init_image: '/tmp/in.png', cinema: { segments: 3 }, ...over } });
+
+test('cinema: a lease sized for the WHOLE chain (segments x the normal video estimate), one lease for all segments', async () => {
+  const f = cinemaFakes();
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  await r.run(cinemaJob(), ctx());
+  assert.equal(f.gate.calls.length, 1, 'one lease covers every segment');
+  assert.equal(f.gate.calls[0].estSeconds, 5400, '3 segments x 1800s');
+  const f2 = cinemaFakes();
+  const r2 = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f2.standin, acquireImpl: f2.gate.acquire, sdcli: f2.sd, mp4Impl: f2.mp4Impl, lastFrameImpl: f2.lastFrameImpl, concatImpl: f2.concatImpl, log: quiet });
+  await r2.run(cinemaJob({ cinema: { segments: 5 } }), ctx());
+  assert.equal(f2.gate.calls[0].estSeconds, 9000, '5 segments x 1800s');
+});
+
+test('cinema: runs each segment through sd-cli, converts each to mp4, extracts the last frame between segments, then concatenates - and cleans up every per-segment file', async () => {
+  const f = cinemaFakes();
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)], ffmpegPath: '/opt/ffmpeg' });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const out = await r.run(cinemaJob(), ctx());
+  assert.equal(f.sd.calls.length, 3, 'one sd-cli call per segment');
+  assert.equal(f.mp4Calls.length, 3, 'one mp4 conversion per segment');
+  assert.equal(f.lastFrameCalls.length, 2, 'segments-1 last-frame extractions (none needed after the final segment)');
+  // segment 1 uses the caller's init_image; segment 2 uses segment 1's last frame; segment 3 uses segment 2's
+  assert.equal(f.sd.calls[0].args[f.sd.calls[0].args.indexOf('-i') + 1], '/tmp/in.png');
+  assert.equal(path.basename(f.lastFrameCalls[0].input), path.basename(f.mp4Calls[0].output));
+  assert.equal(f.sd.calls[1].args[f.sd.calls[1].args.indexOf('-i') + 1], f.lastFrameCalls[0].output);
+  assert.equal(f.sd.calls[2].args[f.sd.calls[2].args.indexOf('-i') + 1], f.lastFrameCalls[1].output);
+  assert.equal(f.concatCalls.length, 1);
+  assert.equal(f.concatCalls[0].inputs.length, 3);
+  assert.deepEqual({ file: out.file, url: out.url, kind: out.kind, mime: out.mime, bytes: out.bytes }, { file: 'job1.mp4', url: '/outputs/job1.mp4', kind: 'video', mime: 'video/mp4', bytes: 8 });
+  assert.equal(out.cinema.segments, 3);
+  assert.equal(out.cinema.seeds.length, 3);
+  assert.equal(fs.readFileSync(path.join(cfg.outputsDir, 'job1.mp4'), 'utf8'), 'FINALMP4');
+  // nothing per-segment (raw avi, per-segment mp4, extracted frame) is left behind in tmp
+  const left = fs.readdirSync(cfg.tmpDir).filter((n) => n.startsWith('job1-'));
+  assert.deepEqual(left, [], `leftover cinema scratch files: ${left}`);
+});
+
+test('cinema: per-segment prompts (when given) override the job prompt for each segment; omitted reuses it for all', async () => {
+  const f = cinemaFakes();
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  await r.run(cinemaJob({ cinema: { segments: 3, prompts: ['a fox emerges', 'the fox trots', 'the fox stops'] } }), ctx());
+  const promptOf = (call) => call.args[call.args.indexOf('-p') + 1];
+  assert.deepEqual(f.sd.calls.map(promptOf), ['a fox emerges', 'the fox trots', 'the fox stops']);
+
+  const f2 = cinemaFakes();
+  const r2 = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f2.standin, acquireImpl: f2.gate.acquire, sdcli: f2.sd, mp4Impl: f2.mp4Impl, lastFrameImpl: f2.lastFrameImpl, concatImpl: f2.concatImpl, log: quiet });
+  await r2.run(cinemaJob(), ctx());
+  assert.deepEqual(f2.sd.calls.map(promptOf), ['a fox trots', 'a fox trots', 'a fox trots']);
+});
+
+test('cinema: each segment gets a FRESH random seed (not the same seed repeated)', async () => {
+  const f = cinemaFakes();
+  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const out = await r.run(cinemaJob(), ctx());
+  assert.equal(new Set(out.cinema.seeds).size, 3, `seeds should differ: ${out.cinema.seeds}`);
+});
+
+test('cinema: progress events carry segment/segments so the GUI can show "segment i/N"', async () => {
+  const f = cinemaFakes();
+  const seen = [];
+  // emitProgress calls standin.events.emit('send', 'local-ai:progress', data) - a real EventEmitter would hand a 'send' listener (channel, data).
+  const standinWithEvents = { ...f.standin, events: { emit: (event, ...args) => { if (event === 'send') seen.push(args[1]); } } };
+  standinWithEvents.events.on = () => {};
+  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: standinWithEvents, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  await r.run(cinemaJob(), ctx());
+  const segTags = seen.filter((e) => e.segments === 3).map((e) => e.segment);
+  assert.deepEqual([...new Set(segTags)], [1, 2, 3]);
+});
+
+test('cinema: a per-segment timeout (jobTimeoutMs applies to EACH segment, not the whole chain) still lets a slow-but-under-budget chain finish', async () => {
+  const f = cinemaFakes();
+  const slow = async (opts) => { await new Promise((r2) => setTimeout(r2, 20)); return f.sd(opts); };
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)], jobTimeoutMs: 60 });   // 60ms/segment x 3 = 180ms budget; 3x20ms = 60ms of real work fits
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: slow, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const out = await r.run(cinemaJob(), ctx());
+  assert.equal(out.cinema.segments, 3);
+});
+
+test('cinema: cancelling mid-chain stops before the next segment and cleans up (no leftover scratch files, no output written)', async () => {
+  const f = cinemaFakes();
+  // Realistic: the real runSdCli kills the child process and rejects as soon as the signal aborts (see the other `hang` fakes in this file).
+  const hangingSd = (opts) => { f.sd.calls.push(opts); return new Promise((_, reject) => { opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { code: 'CANCELLED' })), { once: true }); }); };
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: hangingSd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const controller = new AbortController();
+  const pending = r.run(cinemaJob(), { signal: controller.signal });
+  await new Promise((res) => setImmediate(res));
+  controller.abort();
+  await assert.rejects(() => pending);
+  assert.equal(f.sd.calls.length, 1, 'only segment 1 was ever started');
+  assert.equal(fs.existsSync(path.join(cfg.outputsDir, 'job1.mp4')), false);
+  const left = fs.readdirSync(cfg.tmpDir).filter((n) => n.startsWith('job1-'));
+  assert.deepEqual(left, []);
+});
+
+test('cinema: a failed last-frame extraction fails the whole job and cleans up (no stitched output)', async () => {
+  const f = cinemaFakes({ failAt: 'lastFrame' });
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  await assert.rejects(() => r.run(cinemaJob(), ctx()), { code: 'FFMPEG_FAILED' });
+  assert.equal(f.sd.calls.length, 1, 'never reached segment 2: only 1 segment ran before the extraction failed');
+  assert.equal(fs.existsSync(path.join(cfg.outputsDir, 'job1.mp4')), false);
+  const left = fs.readdirSync(cfg.tmpDir).filter((n) => n.startsWith('job1-'));
+  assert.deepEqual(left, []);
+});
+
+test('cinema: a failed concat fails the job and still cleans up every segment file', async () => {
+  const f = cinemaFakes({ failAt: 'concat' });
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  await assert.rejects(() => r.run(cinemaJob(), ctx()), { code: 'FFMPEG_FAILED' });
+  assert.equal(f.sd.calls.length, 3, 'all 3 segments rendered; only the final stitch failed');
+  assert.equal(fs.existsSync(path.join(cfg.outputsDir, 'job1.mp4')), false);
+  const left = fs.readdirSync(cfg.tmpDir).filter((n) => n.startsWith('job1-'));
+  assert.deepEqual(left, []);
+});

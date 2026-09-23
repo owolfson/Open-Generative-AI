@@ -52,6 +52,9 @@ export const aspectsFor = (model) => (Array.isArray(model.aspectRatios) && model
 const num = (v) => (v === '' || v === null || v === undefined || Number.isNaN(Number(v)) ? undefined : Number(v));
 
 /** Request body for POST /api/local/jobs. Only sends what the user actually set, so the server's measured-safe defaults apply. */
+export const CINEMA_MIN_SEGMENTS = 2;
+export const CINEMA_MAX_SEGMENTS = 8;
+
 export function buildParams({ model, prompt, negative, aspect, device, advanced = {}, imageBase64 }) {
   const p = { model: model.id, prompt: prompt.trim(), aspect_ratio: aspect, device };
   if (negative && negative.trim()) p.negative_prompt = negative.trim();
@@ -62,6 +65,8 @@ export function buildParams({ model, prompt, negative, aspect, device, advanced 
     if (num(advanced.frames) > 0) p.video_frames = num(advanced.frames);
     if (num(advanced.fps) > 0) p.fps = num(advanced.fps);
     if ((model.needsImage || model.acceptsImage) && imageBase64) p.image_base64 = imageBase64;
+    const segments = num(advanced.cinemaSegments);
+    if (model.chainable && segments >= CINEMA_MIN_SEGMENTS) p.cinema = { segments };
   }
   return p;
 }
@@ -76,10 +81,15 @@ export function describeJob(job, { device, elapsedMs = 0, kind = 'image' } = {})
   if (!job) return { text: 'Starting…', pct: null };
   if (job.status === 'queued') return { text: 'Queued behind another local job…', pct: null };
   const p = job.progress;
+  // A "cinema" job (chained multi-segment video) never shows a step-based percentage: it would reset to 0% at the start
+  // of every new segment, which reads as the job stalling or restarting rather than steadily progressing.
+  const seg = p && p.segments > 1 ? `Segment ${p.segment}/${p.segments} — ` : '';
+  const pct = p && p.segments > 1 ? null : undefined;
   if (p && p.totalSteps) {
-    if (p.step >= p.totalSteps) return { text: kind === 'video' ? 'Processing frames…' : 'Decoding image…', pct: 100 };
-    return { text: `Step ${p.step}/${p.totalSteps}`, pct: Math.round((p.progress ?? p.step / p.totalSteps) * 100) };
+    if (p.step >= p.totalSteps) return { text: `${seg}${kind === 'video' ? 'Processing frames…' : 'Decoding image…'}`, pct: pct === null ? null : 100 };
+    return { text: `${seg}Step ${p.step}/${p.totalSteps}`, pct: pct === null ? null : Math.round((p.progress ?? p.step / p.totalSteps) * 100) };
   }
+  if (p && p.segments > 1) return { text: `${seg}starting…`, pct: null };
   if (device === 'v100' && elapsedMs < 90_000) return { text: 'Waiting for the GPU arbiter — the Hermes brain and TTS are being stopped…', pct: null };
   return { text: 'Loading model…', pct: null };
 }

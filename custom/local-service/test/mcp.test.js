@@ -141,3 +141,59 @@ test('local_generate_video queues a video job chained from an earlier image job;
   assert.equal(noImage.result.isError, true);
   assert.match(noImage.result.content[0].text, /IMAGE_REQUIRED/);
 });
+
+// ---------- cinema: chain several of a model's own clips into one longer video (exposed through the MCP tool too) ----------
+test('local_list_models exposes each video model\'s chainable/fps/frameChoices (an MCP caller needs these to use cinema correctly)', async () => {
+  const { mcp } = setup();
+  const video = bodyOf(await call(mcp, 'local_list_models', { kind: 'video' })).models;
+  const ltx = video.find((m) => m.id === 'wan2gp:ltx-video');
+  assert.equal(ltx.chainable, true);
+  assert.equal(ltx.fps, 24);
+  assert.deepEqual(ltx.frameChoices, [33, 49, 97, 121]);
+  const t2v = video.find((m) => m.id === 'wan2gp:wan22-t2v');
+  assert.equal(t2v.chainable, false, 'text-to-video-only models cannot chain');
+});
+
+test('local_generate_video accepts cinema + prompts and they reach the queued job\'s params unchanged', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-mcpc-'));
+  const cfg = { outputsDir: path.join(dir, 'o'), tmpDir: path.join(dir, 't'), muapiKeyFile: keyFile(null), muapiMcpUrl: 'http://127.0.0.1:1/mcp' };
+  fs.mkdirSync(cfg.outputsDir, { recursive: true });
+  const queue = new JobQueue({ run: () => new Promise(() => {}) });   // never resolves: inspect the queued job before it would run
+  const service = createService({ standin, queue, config: cfg });
+  const mcp = createMcp({ config: cfg, queue, service, log: quiet });
+  const res = bodyOf(await call(mcp, 'local_generate_video', {
+    model: 'wan2gp:ltx-video', prompt: 'a fox trots', device: 'v100', cinema: { segments: 3 }, prompts: ['a fox emerges', 'the fox trots', 'the fox stops'],
+  }));
+  const queued = queue.get(res.id);
+  assert.deepEqual(queued.params.cinema, { segments: 3, prompts: ['a fox emerges', 'the fox trots', 'the fox stops'] });
+});
+
+test('an invalid cinema request (bad segment count, or a model that cannot chain) is an isError result, not queued', async () => {
+  const { mcp } = setup();
+  const badCount = await call(mcp, 'local_generate_video', { model: 'wan2gp:ltx-video', prompt: 'x', device: 'v100', cinema: { segments: 1 } });
+  assert.equal(badCount.result.isError, true);
+  assert.match(badCount.result.content[0].text, /BAD_REQUEST/);
+  const cantChain = await call(mcp, 'local_generate_video', { model: 'wan2gp:wan22-t2v', prompt: 'x', device: 'v100', cinema: { segments: 3 } });
+  assert.equal(cantChain.result.isError, true);
+  assert.match(cantChain.result.content[0].text, /CINEMA_UNSUPPORTED/);
+});
+
+test('local_generate_video: wait_seconds is capped at 600s normally, but scales with cinema.segments (each segment is a full render)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-mcpw-'));
+  const cfg = { outputsDir: path.join(dir, 'o'), tmpDir: path.join(dir, 't'), muapiKeyFile: keyFile(null), muapiMcpUrl: 'http://127.0.0.1:1/mcp' };
+  fs.mkdirSync(cfg.outputsDir, { recursive: true });
+  const queue = new JobQueue({ run: async (job) => job.params.__result || { seed: 1, file: 'z.mp4', url: '/outputs/z.mp4', kind: 'video' } });
+  const waits = []; const realWait = queue.wait.bind(queue);
+  queue.wait = (id, ms) => { waits.push(ms); return realWait(id, ms); };
+  const service = createService({ standin, queue, config: cfg });
+  const mcp = createMcp({ config: cfg, queue, service, log: quiet });
+
+  await call(mcp, 'local_generate_video', { model: 'wan2gp:ltx-video', prompt: 'x', device: 'v100', wait_seconds: 700 });
+  assert.equal(waits[0], 600_000, 'a normal (non-cinema) job is still capped at 600s even if wait_seconds asks for more');
+
+  await call(mcp, 'local_generate_video', { model: 'wan2gp:ltx-video', prompt: 'x', device: 'v100', cinema: { segments: 3 }, wait_seconds: 1700 });
+  assert.equal(waits[1], 1700_000, "1700s fits under the scaled cap (600*3=1800s), so the caller's own value is honoured");
+
+  await call(mcp, 'local_generate_video', { model: 'wan2gp:ltx-video', prompt: 'x', device: 'v100', cinema: { segments: 3 }, wait_seconds: 5000 });
+  assert.equal(waits[2], 1800_000, 'still capped once past the scaled ceiling (600*3=1800s)');
+});

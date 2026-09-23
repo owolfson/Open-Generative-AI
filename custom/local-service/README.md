@@ -116,8 +116,23 @@ Do not retry (all measured to fail here): Wan "fast" lightx2v LoRAs (sd-cli abor
 (23.5GB of shmem -> kernel OOM kill), Wan with no placement flag (VAE decode OOM), `--max-vram` (weight-preparation failure), `--backend te=cpu` (SIGSEGV).
 The full story is in `custom/docs/plans/2026-09-20-ogai-local-sdcpp-models.md`.
 
+## Cinema: chaining several clips into one longer video
+
+Every video model caps a single clip at a few seconds (LTX: 121 frames/24fps = 5s, the crash-history limit; Wan: 33 frames/16fps = ~2s) -
+that limit stays as code, on purpose. To go longer, `cinema: { segments: N }` on a `POST /jobs` request (or `local_generate_video`'s
+`cinema` argument over MCP, or the "Cinema" field in the GUI's Advanced panel) chains `N` of a model's own clips into one video: segment 2+
+is a REAL, independent generation seeded from the exact last frame of the one before it (via the bundled ffmpeg), not extrapolation or
+frame interpolation. All `N` segments run back to back under ONE arbiter lease (sized for the whole chain), then get stitched losslessly
+(`-c copy`, no re-encode) into a single mp4. `N` is 2-8 (`OGAI_CINEMA_MAX_SEGMENTS`, default 8); `prompts: [...]` (one string per segment,
+array length must equal `segments`) lets the scene evolve across the video instead of repeating one prompt.
+
+Only a model that takes an input image can chain: `wan2gp:ltx-video` (optional image -> also chainable) and `wan2gp:wan22-i2v` (needs one
+for segment 1 the normal way, via `image_job_id`/`image_base64`). `wan2gp:wan22-t2v` and `wan2gp:hunyuan-video` cannot (`CINEMA_UNSUPPORTED`).
+Each segment pays its own full render time - a 5-segment LTX cinema job is roughly 5x a single LTX job (~30-40 min total): poll
+`local_job_status`/`GET /jobs/:id` rather than blocking on a huge `wait_seconds` (though MCP's cap does scale: 600s x `segments`).
+
 ## Web GUI
 The Next app talks to this service only through its own `/api/local/*` proxy (see `custom/README.md`, "Local inference").
 
 ## Not yet wired
-Wan T2V / Hunyuan / LTX / MiniMax-H3 through sd.cpp (T2V weights are not on disk); `sync-upstream.sh` does not build/deploy this service yet.
+MiniMax-H3 through sd.cpp.

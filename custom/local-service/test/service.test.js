@@ -126,6 +126,78 @@ test('text-to-image models reject an input image instead of silently ignoring it
   assert.equal(ctx.svc.submitGeneration({ model: 'wan2gp:flux-dev', prompt: 'x', init_image: '/etc/passwd' }).params.init_image, undefined);
 });
 
+// ---------- cinema: chain several of a model's own clips into one longer video ----------
+test('cinema.segments is bounds-checked (2..cinemaMaxSegments) and only accepted for a chainable (image-to-video-capable) model', () => {
+  const { svc } = i2vSetup();
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: 'nope' }), { code: 'BAD_REQUEST', status: 400 });
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 1 } }), /2 to 8/);
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 9 } }), /2 to 8/);
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2.5 } }), { code: 'BAD_REQUEST' });
+  // wan22-t2v and hunyuan-video take no input image at all -> cannot chain
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:wan22-t2v', prompt: 'x', cinema: { segments: 3 } }), { code: 'CINEMA_UNSUPPORTED' });
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:hunyuan-video', prompt: 'x', cinema: { segments: 3 } }), { code: 'CINEMA_UNSUPPORTED' });
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:flux-dev', prompt: 'x', cinema: { segments: 3 } }), { code: 'CINEMA_UNSUPPORTED' });   // an image model, not video at all
+  assert.equal(svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 4 } }).params.cinema.segments, 4);
+});
+
+test('a caller-set cinemaMaxSegments is honoured', () => {
+  const { config } = i2vSetup();
+  const svc = createService({ standin, queue: new JobQueue({ run: async () => ({}) }), config: { ...config, cinemaMaxSegments: 3 } });
+  assert.equal(svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 3 } }).params.cinema.segments, 3);
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 4 } }), /2 to 3/);
+});
+
+test('prompts (per-segment) must match cinema.segments exactly, each a non-empty string within the length cap; omitted = reuse prompt for every segment', () => {
+  const { svc } = i2vSetup();
+  const ok = svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'a fox', cinema: { segments: 3 }, prompts: ['a', 'b', 'c'] });
+  assert.deepEqual(ok.params.cinema.prompts, ['a', 'b', 'c']);
+  assert.equal(ok.params.prompts, undefined, 'prompts lives inside cinema, not duplicated at the top level');
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 3 }, prompts: ['a', 'b'] }), /exactly cinema\.segments \(3\)/);
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2 }, prompts: ['a', '  '] }), { code: 'BAD_REQUEST' });
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2 }, prompts: ['a', 'x'.repeat(8001)] }), /longer than 8000/);
+  const reused = svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'a fox', cinema: { segments: 3 } });
+  assert.equal(reused.params.cinema.prompts, undefined);
+  assert.equal(reused.params.prompt, 'a fox');
+});
+
+test('cinema on an image-to-video model (needsImage) still requires a starting image the normal way for segment 1', async () => {
+  const ctx = i2vSetup(); const src = await finishedImageJob(ctx);
+  assert.throws(() => ctx.svc.submitGeneration({ model: 'wan2gp:wan22-i2v', prompt: 'x', cinema: { segments: 2 } }), { code: 'IMAGE_REQUIRED' });
+  const job = ctx.svc.submitGeneration({ model: 'wan2gp:wan22-i2v', prompt: 'x', cinema: { segments: 2 }, image_job_id: src.id });
+  assert.equal(job.params.init_image, path.join(ctx.config.outputsDir, src.result.file));
+  assert.equal(job.params.cinema.segments, 2);
+});
+
+test('cinema on LTX (acceptsImage, optional) works with no starting image (segment 1 is text-to-video) or with one', () => {
+  const { svc } = i2vSetup();
+  const textToVideo = svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2 } });
+  assert.equal(textToVideo.params.init_image, undefined);
+  assert.equal(textToVideo.params.cinema.segments, 2);
+});
+
+test('catalogPayload exposes chainable = needsImage || acceptsImage, only for video models', async () => {
+  const { config } = i2vSetup();
+  const svc = createService({ standin, queue: new JobQueue({ run: async () => ({}) }), config });
+  const byId = Object.fromEntries((await svc.catalogPayload()).models.map((m) => [m.id, m]));
+  assert.equal(byId['wan2gp:ltx-video'].chainable, true);
+  assert.equal(byId['wan2gp:wan22-i2v'].chainable, true);
+  assert.equal(byId['wan2gp:wan22-t2v'].chainable, false);
+  assert.equal(byId['wan2gp:hunyuan-video'].chainable, false);
+  assert.equal(byId['wan2gp:flux-dev'].chainable, undefined, 'image models have no chainable flag at all');
+});
+
+test('catalogPayload exposes each video model\'s own fps + frameChoices, so the GUI can offer LTX\'s 5s option instead of a fixed Wan-shaped list', async () => {
+  const { config } = i2vSetup();
+  const svc = createService({ standin, queue: new JobQueue({ run: async () => ({}) }), config });
+  const byId = Object.fromEntries((await svc.catalogPayload()).models.map((m) => [m.id, m]));
+  assert.equal(byId['wan2gp:ltx-video'].fps, 24);
+  assert.deepEqual(byId['wan2gp:ltx-video'].frameChoices, [33, 49, 97, 121]);   // 121/24fps = 5.04s
+  assert.equal(byId['wan2gp:wan22-i2v'].fps, 16);
+  assert.deepEqual(byId['wan2gp:wan22-i2v'].frameChoices, [17, 25, 33]);
+  assert.equal(byId['wan2gp:hunyuan-video'].fps, 24);
+  assert.equal(byId['wan2gp:flux-dev'].fps, undefined, 'image models have no fps at all');
+});
+
 test('sd-cli progress events from the stand-in land on the running job (this is what the GUI polls)', async () => {
   const { EventEmitter } = require('node:events');
   const events = new EventEmitter();

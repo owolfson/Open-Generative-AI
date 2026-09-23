@@ -3,9 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const catalog = require('./catalog');
-const { getSpec, resolveFiles } = require('./sdcpp-models');
+const { getSpec, resolveFiles, canChain } = require('./sdcpp-models');
 
 const MAX_PROMPT_CHARS = 8000;   // an argv entry over ~128KB makes exec fail, and no model uses more than a few hundred tokens
+const CINEMA_MIN_SEGMENTS = 2;   // 1 segment is just a normal job; omit `cinema` for that
 
 function failure(code, message, status) { return Object.assign(new Error(message), { code, status }); }
 
@@ -26,15 +27,47 @@ function decodeImage(input) {
 /** Shared core used by both the HTTP server and the MCP endpoint. */
 function createService({ standin, queue, config }) {
   if (standin.events && standin.events.on) standin.events.on('send', (channel, data) => { if (channel === 'local-ai:progress') queue.setProgress(data); });
+  // "cinema": chain several of this model's own clips into one longer video, each one after the first seeded from the
+  // last frame of the one before it (a real generation each time, not extrapolation/interpolation). Only a model that
+  // takes an input image can chain (canChain === needsImage || acceptsImage, the same flag resolveInputImage uses).
+  function validateCinema(spec, params) {
+    if (params.cinema === undefined) return undefined;
+    const c = params.cinema;
+    if (typeof c !== 'object' || c === null || Array.isArray(c)) throw failure('BAD_REQUEST', 'cinema must be an object, e.g. {"segments": 4}', 400);
+    const max = (config && config.cinemaMaxSegments) || 8;
+    const segments = Number(c.segments);
+    if (!Number.isInteger(segments) || segments < CINEMA_MIN_SEGMENTS || segments > max) {
+      throw failure('BAD_REQUEST', `cinema.segments must be a whole number from ${CINEMA_MIN_SEGMENTS} to ${max} (got ${JSON.stringify(c.segments)})`, 400);
+    }
+    if (!canChain(spec)) {
+      throw failure('CINEMA_UNSUPPORTED', `${params.model} cannot be chained into a cinema sequence: it does not take an input image between segments (needs image-to-video support)`, 400);
+    }
+    if (params.prompts !== undefined) {
+      if (!Array.isArray(params.prompts) || params.prompts.length !== segments) {
+        throw failure('BAD_REQUEST', `prompts must be an array of exactly cinema.segments (${segments}) strings, one per segment - or omit it to reuse prompt for every segment`, 400);
+      }
+      params.prompts.forEach((p, i) => {
+        if (typeof p !== 'string' || !p.trim()) throw failure('BAD_REQUEST', `prompts[${i}] must be a non-empty string`, 400);
+        if (p.length > MAX_PROMPT_CHARS) throw failure('BAD_REQUEST', `prompts[${i}] is longer than ${MAX_PROMPT_CHARS} characters`, 400);
+      });
+    }
+    return { segments, prompts: params.prompts };
+  }
+
   function submitGeneration(params) {
     const meta = catalog.assess(params && params.model);
     if (!meta) throw failure('UNKNOWN_MODEL', `unknown or excluded model: ${params && params.model}`, 400);
     if (typeof params.prompt !== 'string' || !params.prompt) throw failure('BAD_REQUEST', 'prompt is required', 400);
     if (params.prompt.length > MAX_PROMPT_CHARS) throw failure('BAD_REQUEST', `prompt is longer than ${MAX_PROMPT_CHARS} characters`, 400);
     if (typeof params.negative_prompt === 'string' && params.negative_prompt.length > MAX_PROMPT_CHARS) throw failure('BAD_REQUEST', `negative_prompt is longer than ${MAX_PROMPT_CHARS} characters`, 400);
+    const spec = getSpec(params.model);
+    const cinema = validateCinema(spec, params);   // throws before anything is queued when the request is bad
     const maxPending = (config && config.maxPending) || 25;
     if (queue.pending.length >= maxPending) throw failure('QUEUE_FULL', `${queue.pending.length} jobs are already waiting (limit ${maxPending}); try again when some have finished`, 429);
-    return queue.submit({ kind: meta.kind, route: meta.route, params: resolveInputImage(getSpec(params.model), params) });
+    const resolved = resolveInputImage(spec, params);
+    if (!cinema) return queue.submit({ kind: meta.kind, route: meta.route, params: resolved });
+    const { prompts: droppedTopLevelPrompts, ...withoutPrompts } = resolved;   // eslint-disable-line no-unused-vars -- moved into cinema.prompts below
+    return queue.submit({ kind: meta.kind, route: meta.route, params: { ...withoutPrompts, cinema } });
   }
 
   // A caller may reference an earlier job's image or upload one, but can NEVER name a server path: init_image is stripped
@@ -84,7 +117,12 @@ function createService({ standin, queue, config }) {
       if (!spec) return m;
       const info = { ...m, vramGb: spec.vramGb };
       if (spec.devices) { info.devices = spec.devices; info.deviceNote = spec.deviceNote; }   // clients must not offer a GPU this model cannot use
-      if (spec.kind === 'video') { info.needsImage = Boolean(spec.needsImage); info.acceptsImage = Boolean(spec.acceptsImage); }   // the GUI shows the image picker only for image-to-video
+      if (spec.kind === 'video') {
+        info.needsImage = Boolean(spec.needsImage); info.acceptsImage = Boolean(spec.acceptsImage);   // the GUI shows the image picker only for image-to-video
+        info.chainable = canChain(spec);   // the GUI offers "cinema" (chained multi-segment) mode only for models that can take an image between segments
+        info.fps = spec.defaults({}).fps;   // each model has its own fps (Wan 16, LTX/Hunyuan 24): the GUI needs this to LABEL frame counts as seconds, not assume one
+        if (spec.frameChoices) info.frameChoices = spec.frameChoices;   // this model's own valid/measured-safe frame counts (LTX's must be 8n+1 and go further: up to 121 = 5s)
+      }
       if (config && config.modelDirs) info.filesPresent = resolveFiles(spec, config.modelDirs, {}).missing.length === 0;
       return info;
     };

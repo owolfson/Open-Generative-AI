@@ -4,8 +4,8 @@ import { kindLabel, entryFromJob, mergeServerJobs, proxyUrl, modelReadiness, pic
 
 const flux = { id: 'wan2gp:flux-dev', name: 'Flux.1 Dev', kind: 'image', route: 'sdcpp', star: true, weightsGb: 21.6, filesPresent: true };
 const zimage = { id: 'z-image-turbo', name: 'Z-Image Turbo', kind: 'image', route: 'sdcpp', star: true, weightsGb: 4.9, state: 'downloaded', auxiliaryStatus: { llm: 'downloaded', vae: 'downloaded' } };
-const wan = { id: 'wan2gp:wan22-i2v', name: 'Wan 2.2 (Image-to-Video)', kind: 'video', route: 'sdcpp', star: true, weightsGb: 26.8, filesPresent: false, needsImage: true };
-const t2v = { id: 'wan2gp:wan22-t2v', name: 'Wan 2.2 (Text-to-Video)', kind: 'video', route: 'sdcpp', star: true, weightsGb: 19.3, filesPresent: true, needsImage: false };
+const wan = { id: 'wan2gp:wan22-i2v', name: 'Wan 2.2 (Image-to-Video)', kind: 'video', route: 'sdcpp', star: true, weightsGb: 26.8, filesPresent: false, needsImage: true, chainable: true, fps: 16, frameChoices: [17, 25, 33] };
+const t2v = { id: 'wan2gp:wan22-t2v', name: 'Wan 2.2 (Text-to-Video)', kind: 'video', route: 'sdcpp', star: true, weightsGb: 19.3, filesPresent: true, needsImage: false, chainable: false, fps: 24, frameChoices: [17, 25, 33] };
 const wanT2v = { id: 'wan2gp:wan22-t2v', name: 'Wan 2.2 T2V', kind: 'video', route: 'wangp', star: true };
 const health = { allowedDevices: ['v100', 'gtx1080'] };
 
@@ -101,7 +101,7 @@ test('kindLabel names what a video model takes', () => {
   assert.equal(kindLabel(wan), 'image → video'); assert.equal(kindLabel(t2v), 'text → video'); assert.equal(kindLabel(flux), '');
 });
 
-const ltx = { id: 'wan2gp:ltx-video', name: 'LTX-2.3', kind: 'video', route: 'sdcpp', star: false, weightsGb: 26, filesPresent: true, needsImage: false, acceptsImage: true };
+const ltx = { id: 'wan2gp:ltx-video', name: 'LTX-2.3', kind: 'video', route: 'sdcpp', star: false, weightsGb: 26, filesPresent: true, needsImage: false, acceptsImage: true, chainable: true, fps: 24, frameChoices: [33, 49, 97, 121] };
 
 test('LTX takes an OPTIONAL image: sent when given, omitted when not; labelled text / image -> video', () => {
   assert.equal(kindLabel(ltx), 'text / image → video');
@@ -111,6 +111,22 @@ test('LTX takes an OPTIONAL image: sent when given, omitted when not; labelled t
 });
 
 const zbase = { id: 'z-image-base', name: 'Z-Image Base', kind: 'image', route: 'sdcpp', star: false, weightsGb: 7.2, filesPresent: true, devices: ['gtx1080'], deviceNote: 'renders a blank image on the V100' };
+
+test('buildParams: cinema is sent only for a chainable model with >= 2 segments chosen; never for a non-chainable one or images', () => {
+  assert.deepEqual(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100', advanced: { cinemaSegments: '4' } }).cinema, { segments: 4 });
+  assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100', advanced: { cinemaSegments: '1' } }).cinema, undefined, '1 segment is just a normal job');
+  assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100' }).cinema, undefined, 'no choice made = no cinema field at all');
+  assert.equal(buildParams({ model: t2v, prompt: 'x', aspect: '16:9', device: 'v100', advanced: { cinemaSegments: '4' } }).cinema, undefined, 'a non-chainable model ignores it even if set');
+  assert.equal(buildParams({ model: flux, prompt: 'x', aspect: '1:1', device: 'v100', advanced: { cinemaSegments: '4' } }).cinema, undefined, 'image models have no such field at all');
+});
+
+test('describeJob: a cinema (multi-segment) job shows "Segment i/N" and never a percentage (it would reset to 0% each new segment)', () => {
+  assert.deepEqual(describeJob({ status: 'running', progress: { step: 2, totalSteps: 8, progress: 0.25, segment: 2, segments: 4 } }, { kind: 'video' }), { text: 'Segment 2/4 — Step 2/8', pct: null });
+  assert.deepEqual(describeJob({ status: 'running', progress: { step: 8, totalSteps: 8, progress: 1, segment: 2, segments: 4 } }, { kind: 'video' }), { text: 'Segment 2/4 — Processing frames…', pct: null });
+  assert.deepEqual(describeJob({ status: 'running', progress: { segment: 1, segments: 4 } }, { kind: 'video' }), { text: 'Segment 1/4 — starting…', pct: null });
+  // a normal (non-cinema) video job is unaffected: real percentage, no "Segment" prefix
+  assert.deepEqual(describeJob({ status: 'running', progress: { step: 3, totalSteps: 8, progress: 0.375 } }, { kind: 'video' }), { text: 'Step 3/8', pct: 38 });
+});
 
 test('a model restricted to the GTX 1080 never auto-picks (or accepts) the V100, even though its weights exceed the small-model rule', () => {
   assert.equal(needsV100(zbase), false);

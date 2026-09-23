@@ -5,7 +5,7 @@ const { acquireLease, codeError, MAX_EST_SECONDS } = require('./gate');
 const { assess } = require('./catalog');
 const { SPECS, getSpec, resolveFiles, prepare, buildArgs } = require('./sdcpp-models');
 const { runSdCli } = require('./sdcpp');
-const { toMp4 } = require('./video');
+const { toMp4, lastFrame, concat } = require('./video');
 
 const GTX1080_MAX_WEIGHTS_GB = 5.5;   // ~6GB of the 8GB card is free beside the resident TTS container
 
@@ -60,7 +60,7 @@ const LEASE_MAX_VRAM_GB = 28;   // the arbiter's SAFE_VRAM_BUDGET: a spec's real
  * soon as the next queued job is not a V100 job it covers, the job failed or was cancelled, nothing else is queued (after a
  * short grace so a submit racing the end of a job can still join), or the service shuts down.
  */
-function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, mp4Impl = toMp4, log = console, idleReleaseMs = 10_000 }) {
+function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, mp4Impl = toMp4, lastFrameImpl = lastFrame, concatImpl = concat, log = console, idleReleaseMs = 10_000 }) {
   const lingerMs = config.leaseLingerMs === undefined ? 30_000 : config.leaseLingerMs;
   const leaseMinSeconds = config.leaseMinSeconds === undefined ? DEFAULT_LEASE_MIN_SECONDS : config.leaseMinSeconds;
   const handoverMs = config.leaseHandoverMs === undefined ? DEFAULT_HANDOVER_MS : config.leaseHandoverMs;
@@ -84,7 +84,7 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
   function describe(job) {
     if (!config.gpuEnabled) throw codeError('GPU_DISABLED', 'GPU jobs are disabled: set OGAI_GPU_ENABLED=1 once the GPU test window is approved');
     if (job.route !== 'sdcpp') throw codeError('ENGINE_NOT_READY', `engine route "${job.route}" is not wired yet`);
-    const { device: requested, ...engineParams } = job.params;
+    const { device: requested, cinema: droppedCinema, ...engineParams } = job.params;   // eslint-disable-line no-unused-vars -- runner-orchestration metadata, not a per-generation param
     const known = assess(engineParams.model);
     const spec = getSpec(engineParams.model);
     let pool = config.allowedDevices;
@@ -100,7 +100,10 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     if (missing.length) {
       throw codeError('MODEL_FILES_MISSING', `missing model files (searched ${(config.modelDirs || []).join(', ') || 'no model dirs - set OGAI_MODEL_DIRS'}): ${missing.join(', ')}`);
     }
-    return { onGtx1080, engineParams, spec, params, files, need: { vramGb: spec.vramGb, estSeconds: spec.kind === 'video' ? EST_VIDEO_SECONDS : EST_IMAGE_SECONDS } };
+    // A "cinema" job runs `segments` full generations back to back under ONE lease (see runCinema): size the window for
+    // the whole chain, not just one clip, or the arbiter could hard-expire the lease (2x est_seconds) partway through.
+    const segments = job.params.cinema ? Math.max(1, Number(job.params.cinema.segments) || 1) : 1;
+    return { onGtx1080, engineParams, spec, params, files, need: { vramGb: spec.vramGb, estSeconds: (spec.kind === 'video' ? EST_VIDEO_SECONDS : EST_IMAGE_SECONDS) * segments } };
   }
 
   /** What a queued job would need from a shared V100 lease, or null when it cannot share one (not V100, or it would fail anyway). */
@@ -213,6 +216,52 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     return d.spec.kind === 'video' ? withMp4(result) : result;
   }
 
+  /**
+   * "Cinema": chain `segments` of this model's own clips into one longer video. Every model here caps a single clip at
+   * a few seconds (LTX: 121 frames/5s, the crash-history limit); this is how a caller gets past that WITHOUT loosening
+   * it - segment 2+ is a real, independent generation seeded from the last frame of the one before it (via
+   * lastFrameImpl), not extrapolation. Runs entirely inside ONE queue job (one lease, sized for the whole chain by
+   * describe()); each segment still goes through the SAME sd-cli call + mp4 conversion as a normal video job.
+   */
+  async function runCinema(job, { signal }, d) {
+    const { segments, prompts } = job.params.cinema;
+    fs.mkdirSync(config.tmpDir, { recursive: true });
+    const done = []; const frames = [];
+    let initImage = d.params.init_image;   // set only if the caller gave segment 1 a starting image (needsImage models always have one by here)
+    try {
+      for (let i = 0; i < segments; i++) {
+        if (signal.aborted) throw codeError('CANCELLED', 'cinema job cancelled');
+        const segPrompt = (prompts && prompts[i]) || job.params.prompt;
+        const segParams = prepare(d.spec, { ...d.engineParams, prompt: segPrompt, init_image: initImage, seed: undefined });   // fresh prepare() every segment: per-segment prompts and a fresh seed apply from segment 1 too
+        const rawPath = path.join(config.tmpDir, `${job.id}-seg${i + 1}.${d.spec.ext}`);
+        emitProgress({ status: 'running', segment: i + 1, segments });
+        await sdcli({
+          binary: config.sdcliPath, libDir: path.dirname(config.sdcliPath), args: buildArgs(d.spec, segParams, d.files, rawPath),
+          env: { CUDA_DEVICE_ORDER: 'PCI_BUS_ID', CUDA_VISIBLE_DEVICES: String(d.onGtx1080 ? config.deviceIndex1080 : config.deviceIndexV100) },
+          signal, onProgress: (prog) => emitProgress({ ...prog, segment: i + 1, segments }), parseChunk,
+        });
+        if (!fs.existsSync(rawPath)) throw codeError('BAD_ENGINE_RESULT', `sd-cli finished but wrote no output file for cinema segment ${i + 1}/${segments}`);
+        const segMp4 = path.join(config.tmpDir, `${job.id}-seg${i + 1}.mp4`);
+        await mp4Impl({ ffmpeg: config.ffmpegPath, input: rawPath, output: segMp4 });
+        fs.unlinkSync(rawPath);
+        done.push({ seed: segParams.seed, path: segMp4 });
+        if (i < segments - 1) {
+          const framePath = path.join(config.tmpDir, `${job.id}-seg${i + 1}-last.png`);
+          await lastFrameImpl({ ffmpeg: config.ffmpegPath, input: segMp4, output: framePath });
+          frames.push(framePath);
+          initImage = framePath;
+        }
+      }
+      fs.mkdirSync(config.outputsDir, { recursive: true });
+      const file = `${job.id}.mp4`;
+      const dest = path.join(config.outputsDir, file);
+      await concatImpl({ ffmpeg: config.ffmpegPath, inputs: done.map((s) => s.path), output: dest, tmpDir: config.tmpDir });
+      return { seed: done[0].seed, file, url: `/outputs/${file}`, kind: 'video', mime: MIME.mp4, bytes: fs.statSync(dest).size, cinema: { segments, seeds: done.map((s) => s.seed) } };
+    } finally {
+      for (const p of [...done.map((s) => s.path), ...frames]) fs.rmSync(p, { force: true });   // keep only the stitched final file (or nothing, on failure/cancel) in outputs
+    }
+  }
+
   // Browsers cannot play sd.cpp's MJPEG .avi: make the served artifact an mp4 and keep the avi as `source`. A failed
   // conversion never fails the job (the GPU work is done): the avi is returned with a warning saying why.
   async function withMp4(result) {
@@ -228,9 +277,10 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     return { ...result, file: mp4File, url: `/outputs/${mp4File}`, mime: MIME.mp4, bytes, source: result.file };
   }
 
-  /** Run fn with a signal that also fires after the job time limit. A job that outlives its lease would let the arbiter restore the brain on top of it. */
-  async function withTimeLimit(ctx, fn) {
-    const limitMs = config.jobTimeoutMs || DEFAULT_JOB_TIMEOUT_MS;
+  /** Run fn with a signal that also fires after the job time limit. A job that outlives its lease would let the arbiter restore the brain on top of it.
+   * limitMsOverride: a cinema job budgets the normal per-job timeout PER SEGMENT (each one is its own full sd-cli run), not once for the whole chain. */
+  async function withTimeLimit(ctx, fn, limitMsOverride) {
+    const limitMs = limitMsOverride || config.jobTimeoutMs || DEFAULT_JOB_TIMEOUT_MS;
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     if (ctx.signal.aborted) controller.abort(); else ctx.signal.addEventListener('abort', onAbort, { once: true });
@@ -254,7 +304,9 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
       const d = describe(job);
       if (d.onGtx1080) await dropLease();                       // a held lease is never needed for the 1080; do not sit on the V100
       else await ensureLease(job, d.need, pending());
-      const result = await withTimeLimit(ctx, (limited) => (d.spec ? runExtended(job, limited, d) : runUpstream(job, limited, d)));
+      const segments = job.params.cinema && job.params.cinema.segments;
+      const timeLimit = segments ? (config.jobTimeoutMs || DEFAULT_JOB_TIMEOUT_MS) * segments : undefined;
+      const result = await withTimeLimit(ctx, (limited) => (segments ? runCinema(job, limited, d) : d.spec ? runExtended(job, limited, d) : runUpstream(job, limited, d)), timeLimit);
       return result;
     } finally {
       await settle(pending());

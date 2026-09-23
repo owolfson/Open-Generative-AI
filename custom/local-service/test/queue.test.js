@@ -115,7 +115,17 @@ test('setProgress records sd-cli progress on the RUNNING job only (and is droppe
   const b = q.submit({ kind: 'image', route: 'sdcpp', params: {} });
   await new Promise((r) => setImmediate(r));
   q.setProgress({ step: 2, totalSteps: 4, progress: 0.5, status: 'sampling', extra: 'dropped' });
-  assert.deepEqual(q.get(a.id).progress, { step: 2, totalSteps: 4, progress: 0.5, status: 'sampling' });
+  assert.deepEqual(q.get(a.id).progress, { step: 2, totalSteps: 4, progress: 0.5, status: 'sampling', segment: undefined, segments: undefined });
   assert.equal(q.get(b.id).progress, undefined, 'queued jobs never get progress');
+  gate.resolve(); await q.wait(a.id, 1000);
+});
+
+test('setProgress also carries segment/segments (a "cinema" chained-video job telling the caller which clip a step belongs to)', async () => {
+  const gate = (() => { let r; const promise = new Promise((res) => { r = res; }); return { promise, resolve: r }; })();
+  const q = new JobQueue({ run: async () => { await gate.promise; return {}; } });
+  const a = q.submit({ kind: 'video', route: 'sdcpp', params: {} });
+  await new Promise((r) => setImmediate(r));
+  q.setProgress({ step: 1, totalSteps: 4, segment: 2, segments: 3 });
+  assert.deepEqual(q.get(a.id).progress, { step: 1, totalSteps: 4, progress: undefined, status: undefined, segment: 2, segments: 3 });
   gate.resolve(); await q.wait(a.id, 1000);
 });

@@ -43,25 +43,31 @@ const LOCAL_TOOLS = [
   },
   {
     name: 'local_generate_video',
-    description: 'Video on the local V100, ~6-10 min incl. model load; H.264 mp4 output (the raw avi is kept as result.source); default 640x368, 33 frames. Models (see local_list_models, kind video): wan2gp:wan22-i2v = image-to-video and NEEDS an input image (image_job_id from a finished local_generate_image job - this chains text -> image -> video - or image_base64 PNG/JPEG); wan2gp:wan22-t2v and wan2gp:hunyuan-video = text-to-video (no image; passing one is an error); wan2gp:ltx-video = LTX-2.3 22B distilled, text-to-video OR image-to-video (image optional), HARD LIMITS 540p-class (<=960x576) and <=121 frames (5s), sizes multiples of 32 and frames 8n+1. Runs through the GPU arbiter, which stops the Hermes brain and the TTS for the duration; the result url is served under /outputs.',
+    description: 'Video on the local V100, ~6-10 min incl. model load; H.264 mp4 output (the raw avi is kept as result.source); default 640x368, 33 frames. Models (see local_list_models, kind video, and its own frameChoices/fps): wan2gp:wan22-i2v = image-to-video and NEEDS an input image (image_job_id from a finished local_generate_image job - this chains text -> image -> video - or image_base64 PNG/JPEG), up to 33 frames/16fps (~2s); wan2gp:wan22-t2v and wan2gp:hunyuan-video = text-to-video (no image; passing one is an error), up to 33 frames (~2s / ~1.4s); wan2gp:ltx-video = LTX-2.3 22B distilled, text-to-video OR image-to-video (image optional), HARD LIMITS 540p-class (<=960x576) and <=121 frames at 24fps (5s, the longest a single clip goes), sizes multiples of 32 and frames 8n+1 (33/49/97/121). To go LONGER than one model\'s single-clip cap (e.g. past LTX\'s 5s, toward 20-30s), use `cinema` to chain several of its own clips into one video - see that field. Runs through the GPU arbiter, which stops the Hermes brain and the TTS for the duration; the result url is served under /outputs.',
     inputSchema: {
       type: 'object',
       required: ['model', 'prompt'],
       properties: {
         model: { type: 'string', description: 'A video model id from local_list_models (kind video)' },
-        prompt: { type: 'string', description: 'What should move / happen' },
+        prompt: { type: 'string', description: 'What should move / happen (reused for every cinema segment unless prompts is given)' },
         image_job_id: { type: 'string', description: 'A finished local_generate_image job whose image becomes the first frame' },
         image_base64: { type: 'string', description: 'PNG or JPEG, raw base64 or a data URL (max 10MB)' },
         aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
         width: { type: 'integer' },
         height: { type: 'integer' },
-        video_frames: { type: 'integer', description: 'Default 33 (about 2s at 16 fps)' },
+        video_frames: { type: 'integer', description: 'Default 33 (about 2s at 16 fps); see local_list_models for this model\'s own frameChoices/fps (LTX goes up to 121 = 5s at 24fps)' },
         fps: { type: 'integer', description: 'Default 16' },
         steps: { type: 'integer' },
         seed: { type: 'integer' },
         negative_prompt: { type: 'string' },
         device: { type: 'string', enum: ['v100'], description: 'Video models only fit the V100 - pass "v100" explicitly' },
-        wait_seconds: { type: 'integer', minimum: 0, maximum: 600 },
+        cinema: {
+          type: 'object', required: ['segments'],
+          properties: { segments: { type: 'integer', minimum: 2, maximum: 8, description: 'How many of this model\'s own clips to chain into one longer video' } },
+          description: 'Chain `segments` REAL, independent generations into one longer video (not extrapolation): segment 2+ is seeded from the exact last frame of the one before it, via ffmpeg, then all segments are stitched losslessly into one mp4. Only works on a model that takes an input image (wan2gp:ltx-video or wan2gp:wan22-i2v - check chainable on local_list_models). segments x this model\'s own single-clip length = total length, e.g. LTX at 121 frames/24fps x 5 segments =~25s. Each segment pays its own FULL render time - a 5-segment LTX cinema job takes roughly 5x a single LTX job (~30-40 min total); use wait_seconds generously (it scales with segments here, see that field) or poll with local_job_status instead.',
+        },
+        prompts: { type: 'array', items: { type: 'string' }, description: 'With `cinema`: one prompt per segment (array length MUST equal cinema.segments) to let the scene evolve across the video, e.g. ["a fox emerges from the treeline", "the fox trots forward", "the fox stops and looks up"]. Omit to reuse `prompt` for every segment. Ignored without cinema.' },
+        wait_seconds: { type: 'integer', minimum: 0, maximum: 3600, description: 'Wait up to this long for completion (default 0 = return immediately). Capped at 600s normally; with `cinema` the cap scales to 600s x cinema.segments, since each segment is its own full render.' },
       },
     },
   },
@@ -117,7 +123,11 @@ function createMcp({ config, queue, service, fetchImpl = fetch, log = console })
     const { models, excluded } = await service.catalogPayload();
     const wanted = kind ? models.filter((m) => m.kind === kind) : models;
     return {
-      models: wanted.map((m) => ({ id: m.id, name: m.name, kind: m.kind, route: m.route, v100: m.v100, star: m.star, evidence: m.evidence, weightsGb: m.weightsGb, note: m.note, state: m.state })),
+      models: wanted.map((m) => ({
+        id: m.id, name: m.name, kind: m.kind, route: m.route, v100: m.v100, star: m.star, evidence: m.evidence, weightsGb: m.weightsGb, note: m.note, state: m.state,
+        // video-only: what a single local_generate_video call can ask for on this model, and whether cinema chaining is available at all
+        needsImage: m.needsImage, acceptsImage: m.acceptsImage, chainable: m.chainable, fps: m.fps, frameChoices: m.frameChoices,
+      })),
       excluded,
     };
   }
@@ -134,7 +144,9 @@ function createMcp({ config, queue, service, fetchImpl = fetch, log = console })
         throw Object.assign(new Error(`${params.model} is a ${meta.kind} model; use ${meta.kind === 'video' ? 'local_generate_video' : 'local_generate_image'}`), { code: 'WRONG_KIND' });
       }
       const job = service.submitGeneration(params);
-      const seen = waitSeconds > 0 ? await queue.wait(job.id, Math.min(600, waitSeconds) * 1000) : job;
+      // A cinema job is several full renders back to back: the normal 600s wait cap would time out on it long before it can finish.
+      const maxWaitSeconds = 600 * (params.cinema ? Math.max(1, Number(params.cinema.segments) || 1) : 1);
+      const seen = waitSeconds > 0 ? await queue.wait(job.id, Math.min(maxWaitSeconds, waitSeconds) * 1000) : job;
       return textResult(jobView(seen));
     }
     const job = queue.get(args.job_id);
