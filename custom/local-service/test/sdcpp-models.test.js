@@ -199,6 +199,18 @@ test('LTX-2.3 distilled: sd.cpp recipe (8 steps, cfg 1, euler, fa), text encoder
   assert.ok(pair(i2v, '-i', '/tmp/in.png'), 'the same model animates an image when one is given');
 });
 
+test('strength (sd-cli --strength) reaches the args only when an init image is present; validated to 0-1', () => {
+  const spec = getSpec('wan2gp:ltx-video');
+  const withStrength = buildArgs(spec, prepare(spec, { prompt: 'x', init_image: '/tmp/in.png', strength: '0.45' }), LTX_FILES, '/o.avi');
+  assert.ok(pair(withStrength, '--strength', 0.45));
+  const noImage = buildArgs(spec, prepare(spec, { prompt: 'x', strength: 0.45 }), LTX_FILES, '/o.avi');
+  assert.equal(noImage.includes('--strength'), false, 'strength against no init image is meaningless - never sent');
+  const noStrength = buildArgs(spec, prepare(spec, { prompt: 'x', init_image: '/tmp/in.png' }), LTX_FILES, '/o.avi');
+  assert.equal(noStrength.includes('--strength'), false, 'omitted -> sd-cli\'s own default (0.75), not forced');
+  assert.throws(() => prepare(spec, { prompt: 'x', init_image: '/tmp/in.png', strength: 1.5 }), { code: 'PARAM_INVALID' });
+  assert.throws(() => prepare(spec, { prompt: 'x', init_image: '/tmp/in.png', strength: -0.1 }), { code: 'PARAM_INVALID' });
+});
+
 test('LTX-2.3 sizes: 540p-class only (32-aligned), 16:9 -> 960x544, 9:16 -> 544x960', () => {
   const spec = getSpec('wan2gp:ltx-video');
   const dims = (ar) => { const p = prepare(spec, { prompt: 'x', aspect_ratio: ar }); return [p.width, p.height]; };

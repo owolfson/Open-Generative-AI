@@ -67,6 +67,11 @@ function checkNumbers(given) {
     const v = Number(given[k]);
     if (!Number.isFinite(v) || v < 0 || v > 30) throw codeError('PARAM_INVALID', `${k} must be a number between 0 and 30 (got ${JSON.stringify(given[k])})`);
   }
+  // sd-cli's --strength (noising/unnoising strength against an init image): 0 = ignore the image entirely, 1 = the CLI's own default free-running img2video.
+  if (given.strength !== undefined) {
+    const v = Number(given.strength);
+    if (!Number.isFinite(v) || v < 0 || v > 1) throw codeError('PARAM_INVALID', `strength must be a number between 0 and 1 (got ${JSON.stringify(given.strength)})`);
+  }
   if (given.seed !== undefined && !Number.isFinite(Number(given.seed))) throw codeError('PARAM_INVALID', `seed must be a number (got ${JSON.stringify(given.seed)})`);
 }
 
@@ -223,7 +228,7 @@ function prepare(spec, params) {
   const given = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
   checkNumbers(given);
   const p = { ...spec.defaults(given), ...given };
-  for (const k of [...INT_FIELDS, ...NUM_FIELDS]) if (given[k] !== undefined) p[k] = Number(given[k]);   // numeric strings from JSON forms become numbers
+  for (const k of [...INT_FIELDS, ...NUM_FIELDS, 'strength']) if (given[k] !== undefined) p[k] = Number(given[k]);   // numeric strings from JSON forms become numbers
   const dims = given.aspect_ratio ? dimsFor(spec, given.aspect_ratio) : null;
   if (dims) { if (given.width === undefined) p.width = dims[0]; if (given.height === undefined) p.height = dims[1]; }
   if (given.guidance_scale !== undefined && given.cfg_scale === undefined) p.cfg_scale = Number(given.guidance_scale);   // upstream's name for it
@@ -237,7 +242,9 @@ function prepare(spec, params) {
 
 function buildArgs(spec, p, files, outPath) {
   return ['-p', spec.prompt ? spec.prompt(p, files) : p.prompt, '--seed', str(p.seed), '--steps', str(p.steps),
-    '-W', str(p.width), '-H', str(p.height), '--cfg-scale', str(p.cfg_scale), ...spec.build(p, files), '-o', outPath];
+    '-W', str(p.width), '-H', str(p.height), '--cfg-scale', str(p.cfg_scale),
+    ...(p.strength !== undefined && p.init_image ? ['--strength', str(p.strength)] : []),   // only meaningful against an init image; sd-cli's own default (0.75) otherwise
+    ...spec.build(p, files), '-o', outPath];
 }
 
 module.exports = { SPECS, getSpec, resolveFiles, prepare, buildArgs, canChain, NEG_WAN };

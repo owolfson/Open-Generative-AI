@@ -140,6 +140,16 @@ test('cinema.segments is bounds-checked (2..cinemaMaxSegments) and only accepted
   assert.equal(svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 4 } }).params.cinema.segments, 4);
 });
 
+test('cinema.blendSeconds: a short crossfade dissolve at each seam (default 0.3s, 0 = hard cut), bounds-checked 0-2', () => {
+  const { svc } = i2vSetup();
+  assert.equal(svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2 } }).params.cinema.blendSeconds, 0.3, 'default');
+  assert.equal(svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2, blendSeconds: 0 } }).params.cinema.blendSeconds, 0, 'explicit 0 = hard cut, honoured');
+  assert.equal(svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2, blendSeconds: 1.5 } }).params.cinema.blendSeconds, 1.5);
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2, blendSeconds: -0.1 } }), { code: 'BAD_REQUEST' });
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2, blendSeconds: 2.1 } }), /0 \(hard cut\) to 2/);
+  assert.throws(() => svc.submitGeneration({ model: 'wan2gp:ltx-video', prompt: 'x', cinema: { segments: 2, blendSeconds: 'nope' } }), { code: 'BAD_REQUEST' });
+});
+
 test('a caller-set cinemaMaxSegments is honoured', () => {
   const { config } = i2vSetup();
   const svc = createService({ standin, queue: new JobQueue({ run: async () => ({}) }), config: { ...config, cinemaMaxSegments: 3 } });

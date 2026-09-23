@@ -500,7 +500,7 @@ test('a queued job that is NOT a V100 job (or would fail anyway) still ends the 
 });
 
 // ---------- cinema: chain several of a model's own clips into one longer video ----------
-function cinemaFakes({ mp4Calls = [], lastFrameCalls = [], concatCalls = [], failAt = null } = {}) {
+function cinemaFakes({ mp4Calls = [], lastFrameCalls = [], concatCalls = [], crossfadeCalls = [], failAt = null } = {}) {
   const { standin, gate } = fakes();
   const sd = fakeSdcli('AVIBYTES');
   const mp4Impl = async ({ ffmpeg, input, output }) => { mp4Calls.push({ ffmpeg, input, output }); fs.writeFileSync(output, 'MP4BYTES'); return output; };
@@ -514,19 +514,24 @@ function cinemaFakes({ mp4Calls = [], lastFrameCalls = [], concatCalls = [], fai
     if (failAt === 'concat') throw Object.assign(new Error('ffmpeg exploded'), { code: 'FFMPEG_FAILED' });
     fs.writeFileSync(output, 'FINALMP4'); return output;
   };
-  return { standin, gate, sd, mp4Impl, lastFrameImpl, concatImpl, mp4Calls, lastFrameCalls, concatCalls };
+  const crossfadeConcatImpl = async ({ ffmpeg, inputs, segmentDurationSec, blendSeconds, output }) => {
+    crossfadeCalls.push({ ffmpeg, inputs: inputs.map((i) => path.basename(i)), segmentDurationSec, blendSeconds });
+    if (failAt === 'concat') throw Object.assign(new Error('ffmpeg exploded'), { code: 'FFMPEG_FAILED' });
+    fs.writeFileSync(output, 'BLENDEDMP4'); return output;
+  };
+  return { standin, gate, sd, mp4Impl, lastFrameImpl, concatImpl, crossfadeConcatImpl, mp4Calls, lastFrameCalls, concatCalls, crossfadeCalls };
 }
 const cinemaJob = (over = {}) => job({ params: { model: 'wan2gp:wan22-i2v', prompt: 'a fox trots', device: 'v100', init_image: '/tmp/in.png', cinema: { segments: 3 }, ...over } });
 
 test('cinema: a lease sized for the WHOLE chain (segments x the normal video estimate), one lease for all segments', async () => {
   const f = cinemaFakes();
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
-  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   await r.run(cinemaJob(), ctx());
   assert.equal(f.gate.calls.length, 1, 'one lease covers every segment');
   assert.equal(f.gate.calls[0].estSeconds, 5400, '3 segments x 1800s');
   const f2 = cinemaFakes();
-  const r2 = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f2.standin, acquireImpl: f2.gate.acquire, sdcli: f2.sd, mp4Impl: f2.mp4Impl, lastFrameImpl: f2.lastFrameImpl, concatImpl: f2.concatImpl, log: quiet });
+  const r2 = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f2.standin, acquireImpl: f2.gate.acquire, sdcli: f2.sd, mp4Impl: f2.mp4Impl, lastFrameImpl: f2.lastFrameImpl, concatImpl: f2.concatImpl, crossfadeConcatImpl: f2.crossfadeConcatImpl, log: quiet });
   await r2.run(cinemaJob({ cinema: { segments: 5 } }), ctx());
   assert.equal(f2.gate.calls[0].estSeconds, 9000, '5 segments x 1800s');
 });
@@ -534,7 +539,7 @@ test('cinema: a lease sized for the WHOLE chain (segments x the normal video est
 test('cinema: runs each segment through sd-cli, converts each to mp4, extracts the last frame between segments, then concatenates - and cleans up every per-segment file', async () => {
   const f = cinemaFakes();
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)], ffmpegPath: '/opt/ffmpeg' });
-  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   const out = await r.run(cinemaJob(), ctx());
   assert.equal(f.sd.calls.length, 3, 'one sd-cli call per segment');
   assert.equal(f.mp4Calls.length, 3, 'one mp4 conversion per segment');
@@ -558,20 +563,20 @@ test('cinema: runs each segment through sd-cli, converts each to mp4, extracts t
 test('cinema: per-segment prompts (when given) override the job prompt for each segment; omitted reuses it for all', async () => {
   const f = cinemaFakes();
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
-  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   await r.run(cinemaJob({ cinema: { segments: 3, prompts: ['a fox emerges', 'the fox trots', 'the fox stops'] } }), ctx());
   const promptOf = (call) => call.args[call.args.indexOf('-p') + 1];
   assert.deepEqual(f.sd.calls.map(promptOf), ['a fox emerges', 'the fox trots', 'the fox stops']);
 
   const f2 = cinemaFakes();
-  const r2 = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f2.standin, acquireImpl: f2.gate.acquire, sdcli: f2.sd, mp4Impl: f2.mp4Impl, lastFrameImpl: f2.lastFrameImpl, concatImpl: f2.concatImpl, log: quiet });
+  const r2 = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f2.standin, acquireImpl: f2.gate.acquire, sdcli: f2.sd, mp4Impl: f2.mp4Impl, lastFrameImpl: f2.lastFrameImpl, concatImpl: f2.concatImpl, crossfadeConcatImpl: f2.crossfadeConcatImpl, log: quiet });
   await r2.run(cinemaJob(), ctx());
   assert.deepEqual(f2.sd.calls.map(promptOf), ['a fox trots', 'a fox trots', 'a fox trots']);
 });
 
 test('cinema: each segment gets a FRESH random seed (not the same seed repeated)', async () => {
   const f = cinemaFakes();
-  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   const out = await r.run(cinemaJob(), ctx());
   assert.equal(new Set(out.cinema.seeds).size, 3, `seeds should differ: ${out.cinema.seeds}`);
 });
@@ -582,7 +587,7 @@ test('cinema: progress events carry segment/segments so the GUI can show "segmen
   // emitProgress calls standin.events.emit('send', 'local-ai:progress', data) - a real EventEmitter would hand a 'send' listener (channel, data).
   const standinWithEvents = { ...f.standin, events: { emit: (event, ...args) => { if (event === 'send') seen.push(args[1]); } } };
   standinWithEvents.events.on = () => {};
-  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: standinWithEvents, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: standinWithEvents, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   await r.run(cinemaJob(), ctx());
   const segTags = seen.filter((e) => e.segments === 3).map((e) => e.segment);
   assert.deepEqual([...new Set(segTags)], [1, 2, 3]);
@@ -592,7 +597,7 @@ test('cinema: a per-segment timeout (jobTimeoutMs applies to EACH segment, not t
   const f = cinemaFakes();
   const slow = async (opts) => { await new Promise((r2) => setTimeout(r2, 20)); return f.sd(opts); };
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)], jobTimeoutMs: 60 });   // 60ms/segment x 3 = 180ms budget; 3x20ms = 60ms of real work fits
-  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: slow, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: slow, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   const out = await r.run(cinemaJob(), ctx());
   assert.equal(out.cinema.segments, 3);
 });
@@ -602,7 +607,7 @@ test('cinema: cancelling mid-chain stops before the next segment and cleans up (
   // Realistic: the real runSdCli kills the child process and rejects as soon as the signal aborts (see the other `hang` fakes in this file).
   const hangingSd = (opts) => { f.sd.calls.push(opts); return new Promise((_, reject) => { opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { code: 'CANCELLED' })), { once: true }); }); };
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
-  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: hangingSd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: hangingSd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   const controller = new AbortController();
   const pending = r.run(cinemaJob(), { signal: controller.signal });
   await new Promise((res) => setImmediate(res));
@@ -617,7 +622,7 @@ test('cinema: cancelling mid-chain stops before the next segment and cleans up (
 test('cinema: a failed last-frame extraction fails the whole job and cleans up (no stitched output)', async () => {
   const f = cinemaFakes({ failAt: 'lastFrame' });
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
-  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   await assert.rejects(() => r.run(cinemaJob(), ctx()), { code: 'FFMPEG_FAILED' });
   assert.equal(f.sd.calls.length, 1, 'never reached segment 2: only 1 segment ran before the extraction failed');
   assert.equal(fs.existsSync(path.join(cfg.outputsDir, 'job1.mp4')), false);
@@ -628,10 +633,57 @@ test('cinema: a failed last-frame extraction fails the whole job and cleans up (
 test('cinema: a failed concat fails the job and still cleans up every segment file', async () => {
   const f = cinemaFakes({ failAt: 'concat' });
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
-  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, log: quiet });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
   await assert.rejects(() => r.run(cinemaJob(), ctx()), { code: 'FFMPEG_FAILED' });
   assert.equal(f.sd.calls.length, 3, 'all 3 segments rendered; only the final stitch failed');
   assert.equal(fs.existsSync(path.join(cfg.outputsDir, 'job1.mp4')), false);
   const left = fs.readdirSync(cfg.tmpDir).filter((n) => n.startsWith('job1-'));
   assert.deepEqual(left, []);
+});
+
+// ---------- cinema: crossfade blend at each seam + reduced continuation strength (found live 2026-09-22: a hard cut visibly reset motion energy) ----------
+test('cinema: blendSeconds > 0 uses crossfadeConcatImpl (not concatImpl), with the right segment duration', async () => {
+  const f = cinemaFakes();
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
+  const out = await r.run(cinemaJob({ cinema: { segments: 3, blendSeconds: 0.4 } }), ctx());
+  assert.equal(f.concatCalls.length, 0, 'the lossless path is not used when blending');
+  assert.equal(f.crossfadeCalls.length, 1);
+  assert.deepEqual(f.crossfadeCalls[0], { ffmpeg: cfg.ffmpegPath, inputs: ['job1-seg1.mp4', 'job1-seg2.mp4', 'job1-seg3.mp4'], segmentDurationSec: 33 / 16, blendSeconds: 0.4 });
+  assert.equal(fs.readFileSync(path.join(cfg.outputsDir, 'job1.mp4'), 'utf8'), 'BLENDEDMP4');
+  assert.equal(out.cinema.blendSeconds, 0.4, 'reported back on the result, so the GUI can show what stitching was used');
+});
+
+test('cinema: blendSeconds omitted or 0 keeps the old lossless concatImpl path (a hard cut)', async () => {
+  const f = cinemaFakes();
+  const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
+  const r = createRunner({ config: cfg, standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
+  const out = await r.run(cinemaJob({ cinema: { segments: 3, blendSeconds: 0 } }), ctx());
+  assert.equal(f.crossfadeCalls.length, 0);
+  assert.equal(f.concatCalls.length, 1);
+  assert.equal(out.cinema.blendSeconds, 0);
+});
+
+test('cinema: a blendSeconds at or past a segment\'s own length is refused BEFORE any lease is taken', async () => {
+  const f = cinemaFakes();
+  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
+  await assert.rejects(() => r.run(cinemaJob({ cinema: { segments: 3, blendSeconds: 33 / 16 } }), ctx()), (err) => err.code === 'PARAM_LIMIT' && /2\.06s/.test(err.message));
+  assert.equal(f.gate.calls.length, 0, 'never evicted the brain for a request that cannot run');
+  assert.equal(f.sd.calls.length, 0);
+});
+
+test('cinema: continuation segments (2..N) default to a lower --strength; segment 1 never gets one (no "continuation" concept applies to it)', async () => {
+  const f = cinemaFakes();
+  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
+  await r.run(cinemaJob(), ctx());
+  const strengthOf = (call) => { const i = call.args.indexOf('--strength'); return i === -1 ? undefined : Number(call.args[i + 1]); };
+  assert.deepEqual(f.sd.calls.map(strengthOf), [undefined, 0.5, 0.5]);
+});
+
+test('cinema: a caller-supplied strength overrides the continuation default for every segment, including segment 1', async () => {
+  const f = cinemaFakes();
+  const r = createRunner({ config: config({ modelDirs: [modelDir(WAN_FILES)] }), standin: f.standin, acquireImpl: f.gate.acquire, sdcli: f.sd, mp4Impl: f.mp4Impl, lastFrameImpl: f.lastFrameImpl, concatImpl: f.concatImpl, crossfadeConcatImpl: f.crossfadeConcatImpl, log: quiet });
+  await r.run(cinemaJob({ strength: 0.9 }), ctx());
+  const strengthOf = (call) => { const i = call.args.indexOf('--strength'); return i === -1 ? undefined : Number(call.args[i + 1]); };
+  assert.deepEqual(f.sd.calls.map(strengthOf), [0.9, 0.9, 0.9]);
 });

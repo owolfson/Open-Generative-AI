@@ -7,6 +7,8 @@ const { getSpec, resolveFiles, canChain } = require('./sdcpp-models');
 
 const MAX_PROMPT_CHARS = 8000;   // an argv entry over ~128KB makes exec fail, and no model uses more than a few hundred tokens
 const CINEMA_MIN_SEGMENTS = 2;   // 1 segment is just a normal job; omit `cinema` for that
+const DEFAULT_BLEND_SECONDS = 0.3;   // default crossfade dissolve at each cinema seam - a hard cut visibly shows the subject's motion energy reset (found live 2026-09-22)
+const MAX_BLEND_SECONDS = 2;
 
 function failure(code, message, status) { return Object.assign(new Error(message), { code, status }); }
 
@@ -42,6 +44,12 @@ function createService({ standin, queue, config }) {
     if (!canChain(spec)) {
       throw failure('CINEMA_UNSUPPORTED', `${params.model} cannot be chained into a cinema sequence: it does not take an input image between segments (needs image-to-video support)`, 400);
     }
+    // blendSeconds: a short crossfade dissolve at each seam (default DEFAULT_BLEND_SECONDS; 0 = a hard cut, the old behaviour). Segment-length-relative
+    // bounds (blend < each segment's own duration) can only be checked once the runner has resolved video_frames/fps, so that check is in runner.js.
+    let blendSeconds = c.blendSeconds === undefined ? DEFAULT_BLEND_SECONDS : Number(c.blendSeconds);
+    if (!Number.isFinite(blendSeconds) || blendSeconds < 0 || blendSeconds > MAX_BLEND_SECONDS) {
+      throw failure('BAD_REQUEST', `cinema.blendSeconds must be a number from 0 (hard cut) to ${MAX_BLEND_SECONDS} (got ${JSON.stringify(c.blendSeconds)})`, 400);
+    }
     if (params.prompts !== undefined) {
       if (!Array.isArray(params.prompts) || params.prompts.length !== segments) {
         throw failure('BAD_REQUEST', `prompts must be an array of exactly cinema.segments (${segments}) strings, one per segment - or omit it to reuse prompt for every segment`, 400);
@@ -51,7 +59,7 @@ function createService({ standin, queue, config }) {
         if (p.length > MAX_PROMPT_CHARS) throw failure('BAD_REQUEST', `prompts[${i}] is longer than ${MAX_PROMPT_CHARS} characters`, 400);
       });
     }
-    return { segments, prompts: params.prompts };
+    return { segments, blendSeconds, prompts: params.prompts };
   }
 
   function submitGeneration(params) {

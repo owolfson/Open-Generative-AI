@@ -64,4 +64,40 @@ function concat({ ffmpeg, inputs, output, spawnImpl = spawn, tmpDir }) {
   });
 }
 
-module.exports = { toMp4, lastFrame, concat };
+/**
+ * Stitch same-length mp4 segments with a short crossfade dissolve at each seam instead of a hard cut, via ffmpeg's
+ * `xfade` filter chained across all inputs. Used by "cinema" chaining: consecutive segments are independent
+ * generations that only share their exact first/last PIXELS (see lastFrame) - they do not share motion energy, so a
+ * hard cut can show the subject's speed/gait visibly reset. A dissolve does not fix that mismatch, it hides it the
+ * way a video editor would. Unlike `concat`, this re-encodes (a blend genuinely combines two frames' pixels, so a
+ * container-level `-c copy` splice cannot do it) - still just a few CPU seconds per segment, not GPU time.
+ *
+ * Requires every input to be the SAME duration (`segmentDurationSec`, e.g. video_frames/fps - true for a cinema job,
+ * where every segment shares the request's own frame count and fps) and longer than `blendSeconds` (checked by the
+ * caller: service.js's cinema validation keeps blendSeconds comfortably under a segment's own length).
+ */
+function crossfadeConcat({ ffmpeg, inputs, segmentDurationSec, blendSeconds, output, spawnImpl = spawn }) {
+  return new Promise((resolve, reject) => {
+    if (!ffmpeg || !fs.existsSync(ffmpeg)) { reject(codeError('FFMPEG_MISSING', `ffmpeg not found${ffmpeg ? ` at ${ffmpeg}` : ' (set OGAI_FFMPEG)'}`)); return; }
+    if (!Array.isArray(inputs) || inputs.length === 0) { reject(codeError('BAD_REQUEST', 'crossfadeConcat needs at least one input file')); return; }
+    if (inputs.length === 1) { fs.copyFileSync(inputs[0], output); resolve(output); return; }   // nothing to blend
+    const args = ['-y'];
+    for (const f of inputs) args.push('-i', f);
+    const nodes = [];
+    let prev = '0';
+    for (let i = 1; i < inputs.length; i += 1) {
+      const offset = (i * (segmentDurationSec - blendSeconds)).toFixed(3);
+      const out = i === inputs.length - 1 ? 'out' : `v${i}`;
+      nodes.push(`[${prev}][${i}]xfade=transition=fade:duration=${blendSeconds}:offset=${offset}[${out}]`);
+      prev = out;
+    }
+    args.push('-filter_complex', nodes.join(';'), '-map', '[out]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'veryfast', '-movflags', '+faststart', '-an', output);
+    const child = spawnImpl(ffmpeg, args);
+    let stderr = '';
+    child.stderr.on('data', (c) => { stderr = (stderr + c).slice(-2000); });
+    child.on('error', (err) => reject(codeError('FFMPEG_MISSING', err.message)));
+    child.on('close', (code) => (code === 0 ? resolve(output) : reject(codeError('FFMPEG_FAILED', `ffmpeg (crossfade) exited (${code}): ${stderr.trim().split('\n').slice(-3).join(' | ')}`))));
+  });
+}
+
+module.exports = { toMp4, lastFrame, concat, crossfadeConcat };

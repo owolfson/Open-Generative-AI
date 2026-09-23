@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { toMp4, lastFrame, concat } = require('../src/video');
+const { toMp4, lastFrame, concat, crossfadeConcat } = require('../src/video');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-video-'));
 
@@ -68,4 +68,35 @@ test('concat rejects on ffmpeg failure (and still cleans up the filelist) and on
   await assert.rejects(() => concat({ ffmpeg: fakeFfmpeg(dir, { fail: true }), inputs: [a], output: path.join(dir, 'o.mp4'), tmpDir: dir }), { code: 'FFMPEG_FAILED' });
   assert.equal(fs.readdirSync(dir).filter((f) => f.startsWith('concat-')).length, 0);
   await assert.rejects(() => concat({ ffmpeg: fakeFfmpeg(dir), inputs: [], output: path.join(dir, 'o.mp4') }), { code: 'BAD_REQUEST' });
+});
+
+// ---------- crossfadeConcat: dissolve at each "cinema" seam instead of a hard cut (masks the motion-energy jump a hard cut shows) ----------
+test('crossfadeConcat chains an xfade node per seam, with each offset advancing by (segment length - blend length)', async () => {
+  const dir = tmp();
+  const a = path.join(dir, 'a.mp4'); const b = path.join(dir, 'b.mp4'); const c = path.join(dir, 'c.mp4'); const output = path.join(dir, 'final.mp4');
+  fs.writeFileSync(a, 'A'); fs.writeFileSync(b, 'B'); fs.writeFileSync(c, 'C');
+  const res = await crossfadeConcat({ ffmpeg: fakeFfmpeg(dir), inputs: [a, b, c], segmentDurationSec: 1.375, blendSeconds: 0.3, output });
+  assert.equal(res, output);
+  const args = fs.readFileSync(`${output}.args`, 'utf8');
+  assert.ok(args.includes(`-i ${a}`) && args.includes(`-i ${b}`) && args.includes(`-i ${c}`));
+  // seam 1: offset = 1 * (1.375 - 0.3) = 1.075; seam 2 (chained onto the first node's output): offset = 2 * (1.375 - 0.3) = 2.150
+  assert.match(args, /\[0\]\[1\]xfade=transition=fade:duration=0\.3:offset=1\.075\[v1\]/);
+  assert.match(args, /\[v1\]\[2\]xfade=transition=fade:duration=0\.3:offset=2\.150\[out\]/);
+  assert.ok(args.includes('-map [out]'));
+  for (const want of ['-c:v libx264', '-pix_fmt yuv420p', '-movflags +faststart']) assert.ok(args.includes(want), `${want} in: ${args}`);
+});
+
+test('crossfadeConcat with a single input just copies it (nothing to blend)', async () => {
+  const dir = tmp(); const a = path.join(dir, 'a.mp4'); fs.writeFileSync(a, 'ONLYSEG');
+  const output = path.join(dir, 'o.mp4');
+  const res = await crossfadeConcat({ ffmpeg: fakeFfmpeg(dir), inputs: [a], segmentDurationSec: 1.375, blendSeconds: 0.3, output });
+  assert.equal(res, output);
+  assert.equal(fs.readFileSync(output, 'utf8'), 'ONLYSEG');
+});
+
+test('crossfadeConcat rejects FFMPEG_FAILED / FFMPEG_MISSING / no inputs the same way concat does', async () => {
+  const dir = tmp(); const a = path.join(dir, 'a.mp4'); const b = path.join(dir, 'b.mp4'); fs.writeFileSync(a, 'A'); fs.writeFileSync(b, 'B');
+  await assert.rejects(() => crossfadeConcat({ ffmpeg: fakeFfmpeg(dir, { fail: true }), inputs: [a, b], segmentDurationSec: 1.375, blendSeconds: 0.3, output: path.join(dir, 'o.mp4') }), { code: 'FFMPEG_FAILED' });
+  await assert.rejects(() => crossfadeConcat({ ffmpeg: path.join(dir, 'nope'), inputs: [a, b], segmentDurationSec: 1.375, blendSeconds: 0.3, output: path.join(dir, 'o.mp4') }), { code: 'FFMPEG_MISSING' });
+  await assert.rejects(() => crossfadeConcat({ ffmpeg: fakeFfmpeg(dir), inputs: [], segmentDurationSec: 1.375, blendSeconds: 0.3, output: path.join(dir, 'o.mp4') }), { code: 'BAD_REQUEST' });
 });

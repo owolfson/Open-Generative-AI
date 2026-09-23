@@ -165,7 +165,7 @@ test('local_generate_video accepts cinema + prompts and they reach the queued jo
     model: 'wan2gp:ltx-video', prompt: 'a fox trots', device: 'v100', cinema: { segments: 3 }, prompts: ['a fox emerges', 'the fox trots', 'the fox stops'],
   }));
   const queued = queue.get(res.id);
-  assert.deepEqual(queued.params.cinema, { segments: 3, prompts: ['a fox emerges', 'the fox trots', 'the fox stops'] });
+  assert.deepEqual(queued.params.cinema, { segments: 3, blendSeconds: 0.3, prompts: ['a fox emerges', 'the fox trots', 'the fox stops'] });
 });
 
 test('an invalid cinema request (bad segment count, or a model that cannot chain) is an isError result, not queued', async () => {

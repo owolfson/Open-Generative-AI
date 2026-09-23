@@ -79,9 +79,14 @@ test('error messages and durations are human readable', () => {
 const doneJob = (over = {}) => ({ id: 'j1', kind: 'image', status: 'done', startedAt: 1000, finishedAt: 5000, params: { model: 'wan2gp:flux-dev', prompt: 'a lighthouse', device: 'v100', aspect_ratio: '1:1' }, result: { url: '/outputs/j1.png', seed: 7 }, ...over });
 
 test('entryFromJob turns a finished server job (from the GUI, an agent or MCP) into a history entry', () => {
-  assert.deepEqual(entryFromJob(doneJob(), [flux]), { id: 'j1', kind: 'image', url: '/api/local/outputs/j1.png', prompt: 'a lighthouse', model: 'wan2gp:flux-dev', modelName: 'Flux.1 Dev', device: 'v100', aspect: '1:1', seed: 7, seconds: 4, createdAt: 5000 });
+  assert.deepEqual(entryFromJob(doneJob(), [flux]), { id: 'j1', kind: 'image', url: '/api/local/outputs/j1.png', prompt: 'a lighthouse', model: 'wan2gp:flux-dev', modelName: 'Flux.1 Dev', device: 'v100', aspect: '1:1', seed: 7, seconds: 4, createdAt: 5000, cinema: null });
   assert.equal(entryFromJob(doneJob({ params: { model: 'mystery', prompt: 'x' } }), [flux]).modelName, 'mystery');
   for (const j of [null, doneJob({ status: 'error' }), doneJob({ status: 'running' }), doneJob({ result: null }), doneJob({ result: {} })]) assert.equal(entryFromJob(j, [flux]), null);
+});
+
+test('entryFromJob carries a "cinema" job\'s segments/blendSeconds through, so the GUI can badge what stitching was used', () => {
+  const entry = entryFromJob(doneJob({ result: { url: '/outputs/j1.mp4', seed: 7, cinema: { segments: 3, blendSeconds: 0.4, seeds: [1, 2, 3] } } }), [flux]);
+  assert.deepEqual(entry.cinema, { segments: 3, blendSeconds: 0.4, seeds: [1, 2, 3] });
 });
 
 test('mergeServerJobs adds unseen finished jobs oldest-first (so the newest ends on top), never re-adds dismissed ones or duplicates', () => {
@@ -118,6 +123,13 @@ test('buildParams: cinema is sent only for a chainable model with >= 2 segments 
   assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100' }).cinema, undefined, 'no choice made = no cinema field at all');
   assert.equal(buildParams({ model: t2v, prompt: 'x', aspect: '16:9', device: 'v100', advanced: { cinemaSegments: '4' } }).cinema, undefined, 'a non-chainable model ignores it even if set');
   assert.equal(buildParams({ model: flux, prompt: 'x', aspect: '1:1', device: 'v100', advanced: { cinemaSegments: '4' } }).cinema, undefined, 'image models have no such field at all');
+});
+
+test('buildParams: cinemaBlend is sent only alongside cinema, and only when the field was actually touched (0 is a real, honoured choice)', () => {
+  assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100', advanced: { cinemaSegments: '4' } }).cinema.blendSeconds, undefined, 'left blank -> the server default applies, nothing forced');
+  assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100', advanced: { cinemaSegments: '4', cinemaBlend: '0.6' } }).cinema.blendSeconds, 0.6);
+  assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100', advanced: { cinemaSegments: '4', cinemaBlend: '0' } }).cinema.blendSeconds, 0, '0 (hard cut) is a real choice, not "unset"');
+  assert.equal(buildParams({ model: ltx, prompt: 'x', aspect: '16:9', device: 'v100', advanced: { cinemaBlend: '0.6' } }).cinema, undefined, 'no cinema without segments, regardless of blend');
 });
 
 test('describeJob: a cinema (multi-segment) job shows "Segment i/N" and never a percentage (it would reset to 0% each new segment)', () => {

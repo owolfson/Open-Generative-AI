@@ -21,6 +21,7 @@ import {
 import LocalToggle, { BoltIcon } from "./LocalToggle.jsx";
 import { cancelJob, listJobs, submitJob, urlToBase64, blobToBase64, waitForJob } from "./localClient.js";
 import {
+  CINEMA_DEFAULT_BLEND_SECONDS,
   CINEMA_MAX_SEGMENTS,
   CINEMA_MIN_SEGMENTS,
   DEVICE_LABEL,
@@ -119,6 +120,7 @@ function MediaCard({ entry, onOpen, onRemove, onAnimate }) {
           <span className="text-[10px] font-bold text-primary px-2 py-0.5 bg-primary/10 rounded border border-primary/20">{entry.modelName}</span>
           <span className="text-[10px] text-white/40">{DEVICE_LABEL[entry.device] || entry.device}</span>
           {entry.seconds ? <span className="text-[10px] text-white/30">{formatDuration(entry.seconds * 1000)}</span> : null}
+          {entry.cinema ? <span className="text-[10px] text-[#22d3ee]/70" title="Chained cinema clips">🎬 {entry.cinema.segments}{entry.cinema.blendSeconds ? ` · ${entry.cinema.blendSeconds}s blend` : " · hard cut"}</span> : null}
         </div>
       </div>
     </div>
@@ -146,6 +148,7 @@ function Viewer({ entry, onClose, onAnimate }) {
           <Badge>{DEVICE_LABEL[entry.device] || entry.device}</Badge>
           {entry.seed ? <Badge>seed {entry.seed}</Badge> : null}
           {entry.seconds ? <Badge>{formatDuration(entry.seconds * 1000)}</Badge> : null}
+          {entry.cinema ? <Badge tone="warn">🎬 {entry.cinema.segments} clips{entry.cinema.blendSeconds ? `, ${entry.cinema.blendSeconds}s blend` : ", hard cut"}</Badge> : null}
         </div>
         <div className="flex gap-2 mt-1">
           <a href={entry.url} download className="px-4 py-2 rounded-full bg-[#22d3ee] text-black text-xs font-bold">Download</a>
@@ -190,7 +193,7 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
   const [modelId, setModelId] = useState(null);
   const [aspect, setAspect] = useState(kind === "video" ? "16:9" : "1:1");
   const [deviceChoice, setDeviceChoice] = useState("auto");
-  const [advanced, setAdvanced] = useState({ steps: "", guidance: "", seed: "", frames: 33, cinemaSegments: "" });
+  const [advanced, setAdvanced] = useState({ steps: "", guidance: "", seed: "", frames: 33, cinemaSegments: "", cinemaBlend: "" });
   const [source, setSource] = useState(null);          // video: { url, file?, label }
   const [open, setOpen] = useState(null);              // model | aspect | device | advanced | source
   const [active, setActive] = useState(null);          // the running job's tracking info
@@ -545,20 +548,36 @@ export default function LocalStudio({ kind = "image", onGenerationStart, onGener
                           </div>
                         </Field>
                         {model?.chainable && (
-                          <Field label="Cinema (chain clips into a longer video)">
-                            <div className="flex items-center gap-2 normal-case tracking-normal">
-                              <input
-                                className={inputClass} inputMode="numeric" placeholder="off"
-                                value={advanced.cinemaSegments}
-                                onChange={(e) => setAdvanced((a) => ({ ...a, cinemaSegments: e.target.value }))}
-                              />
-                              <span className="text-[11px] text-white/40 shrink-0">
-                                {Number(advanced.cinemaSegments) >= CINEMA_MIN_SEGMENTS
-                                  ? `≈ ${(((advanced.frames || model.frameChoices?.[0] || 1) / (model.fps || FALLBACK_FPS)) * Number(advanced.cinemaSegments)).toFixed(1)}s total (${advanced.cinemaSegments} clips)`
-                                  : `segments, ${CINEMA_MIN_SEGMENTS}-${CINEMA_MAX_SEGMENTS} (each pays its own full render time)`}
-                              </span>
-                            </div>
-                          </Field>
+                          <>
+                            <Field label="Cinema (chain clips into a longer video)">
+                              <div className="flex items-center gap-2 normal-case tracking-normal">
+                                <input
+                                  className={inputClass} inputMode="numeric" placeholder="off"
+                                  value={advanced.cinemaSegments}
+                                  onChange={(e) => setAdvanced((a) => ({ ...a, cinemaSegments: e.target.value }))}
+                                />
+                                <span className="text-[11px] text-white/40 shrink-0">
+                                  {Number(advanced.cinemaSegments) >= CINEMA_MIN_SEGMENTS
+                                    ? `≈ ${(((advanced.frames || model.frameChoices?.[0] || 1) / (model.fps || FALLBACK_FPS)) * Number(advanced.cinemaSegments)).toFixed(1)}s total (${advanced.cinemaSegments} clips)`
+                                    : `segments, ${CINEMA_MIN_SEGMENTS}-${CINEMA_MAX_SEGMENTS} (each pays its own full render time)`}
+                                </span>
+                              </div>
+                            </Field>
+                            {Number(advanced.cinemaSegments) >= CINEMA_MIN_SEGMENTS && (
+                              <Field label="Blend at each cut">
+                                <div className="flex items-center gap-2 normal-case tracking-normal">
+                                  <input
+                                    className={inputClass} inputMode="decimal" placeholder={`default ${CINEMA_DEFAULT_BLEND_SECONDS}s`}
+                                    value={advanced.cinemaBlend}
+                                    onChange={(e) => setAdvanced((a) => ({ ...a, cinemaBlend: e.target.value }))}
+                                  />
+                                  <span className="text-[11px] text-white/40 shrink-0" title="Each clip is a separate generation seeded only from the last frame of the one before it - it has no sense of how fast that frame was moving, so a hard cut (0s) can visibly show a jump in motion speed. A short crossfade dissolves through the cut instead of hiding it.">
+                                    seconds · dissolves the cut (a hard cut can visibly jump in motion speed)
+                                  </span>
+                                </div>
+                              </Field>
+                            )}
+                          </>
                         )}
                       </>
                     )}

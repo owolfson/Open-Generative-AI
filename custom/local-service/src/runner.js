@@ -5,7 +5,7 @@ const { acquireLease, codeError, MAX_EST_SECONDS } = require('./gate');
 const { assess } = require('./catalog');
 const { SPECS, getSpec, resolveFiles, prepare, buildArgs } = require('./sdcpp-models');
 const { runSdCli } = require('./sdcpp');
-const { toMp4, lastFrame, concat } = require('./video');
+const { toMp4, lastFrame, concat, crossfadeConcat } = require('./video');
 
 const GTX1080_MAX_WEIGHTS_GB = 5.5;   // ~6GB of the 8GB card is free beside the resident TTS container
 
@@ -47,6 +47,11 @@ const EST_VIDEO_SECONDS = 1800;
 const DEFAULT_LEASE_MIN_SECONDS = 3600;
 const DEFAULT_HANDOVER_MS = 500;   // let the queued acquire reach the arbiter before the old lease is released
 const LEASE_MAX_VRAM_GB = 28;   // the arbiter's SAFE_VRAM_BUDGET: a spec's real peak may exceed it (Flux 28.8GB), the lease claim may not
+// A "cinema" continuation segment (2..N) is only conditioned on a single still frame of the one before it, with no velocity information -
+// sd.cpp's LTX port has no documented multi-frame/motion conditioning to give it that (checked its own docs/ltx2.md: T2V, I2V, FLF2V, spatial
+// upscale, nothing else). A lower --strength keeps the segment closer to a continuation of that still frame instead of a free reinterpretation
+// (sd-cli's own default is 0.75); a caller's own `strength` in the request is still honoured over this default. Found live 2026-09-22.
+const CINEMA_CONTINUATION_STRENGTH = 0.5;
 
 /**
  * Executes one queued job on one of two paths, both through the same sd-cli binary:
@@ -60,7 +65,7 @@ const LEASE_MAX_VRAM_GB = 28;   // the arbiter's SAFE_VRAM_BUDGET: a spec's real
  * soon as the next queued job is not a V100 job it covers, the job failed or was cancelled, nothing else is queued (after a
  * short grace so a submit racing the end of a job can still join), or the service shuts down.
  */
-function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, mp4Impl = toMp4, lastFrameImpl = lastFrame, concatImpl = concat, log = console, idleReleaseMs = 10_000 }) {
+function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, mp4Impl = toMp4, lastFrameImpl = lastFrame, concatImpl = concat, crossfadeConcatImpl = crossfadeConcat, log = console, idleReleaseMs = 10_000 }) {
   const lingerMs = config.leaseLingerMs === undefined ? 30_000 : config.leaseLingerMs;
   const leaseMinSeconds = config.leaseMinSeconds === undefined ? DEFAULT_LEASE_MIN_SECONDS : config.leaseMinSeconds;
   const handoverMs = config.leaseHandoverMs === undefined ? DEFAULT_HANDOVER_MS : config.leaseHandoverMs;
@@ -103,6 +108,13 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     // A "cinema" job runs `segments` full generations back to back under ONE lease (see runCinema): size the window for
     // the whole chain, not just one clip, or the arbiter could hard-expire the lease (2x est_seconds) partway through.
     const segments = job.params.cinema ? Math.max(1, Number(job.params.cinema.segments) || 1) : 1;
+    if (job.params.cinema) {
+      const segmentDurationSec = params.video_frames / params.fps;
+      const blendSeconds = job.params.cinema.blendSeconds || 0;
+      if (blendSeconds >= segmentDurationSec) {
+        throw codeError('PARAM_LIMIT', `cinema.blendSeconds (${blendSeconds}s) must be less than each segment's own length (${segmentDurationSec.toFixed(2)}s at ${params.video_frames} frames / ${params.fps}fps)`);
+      }
+    }
     return { onGtx1080, engineParams, spec, params, files, need: { vramGb: spec.vramGb, estSeconds: (spec.kind === 'video' ? EST_VIDEO_SECONDS : EST_IMAGE_SECONDS) * segments } };
   }
 
@@ -224,7 +236,8 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
    * describe()); each segment still goes through the SAME sd-cli call + mp4 conversion as a normal video job.
    */
   async function runCinema(job, { signal }, d) {
-    const { segments, prompts } = job.params.cinema;
+    const { segments, prompts, blendSeconds } = job.params.cinema;
+    const segmentDurationSec = d.params.video_frames / d.params.fps;   // already checked against blendSeconds in describe(), before any lease
     fs.mkdirSync(config.tmpDir, { recursive: true });
     const done = []; const frames = [];
     let initImage = d.params.init_image;   // set only if the caller gave segment 1 a starting image (needsImage models always have one by here)
@@ -232,7 +245,9 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
       for (let i = 0; i < segments; i++) {
         if (signal.aborted) throw codeError('CANCELLED', 'cinema job cancelled');
         const segPrompt = (prompts && prompts[i]) || job.params.prompt;
-        const segParams = prepare(d.spec, { ...d.engineParams, prompt: segPrompt, init_image: initImage, seed: undefined });   // fresh prepare() every segment: per-segment prompts and a fresh seed apply from segment 1 too
+        // Continuation segments (i > 0) default to a lower --strength: see CINEMA_CONTINUATION_STRENGTH. A caller's own `strength` wins either way.
+        const strength = job.params.strength !== undefined ? job.params.strength : (i > 0 ? CINEMA_CONTINUATION_STRENGTH : undefined);
+        const segParams = prepare(d.spec, { ...d.engineParams, prompt: segPrompt, init_image: initImage, strength, seed: undefined });   // fresh prepare() every segment: per-segment prompts and a fresh seed apply from segment 1 too
         const rawPath = path.join(config.tmpDir, `${job.id}-seg${i + 1}.${d.spec.ext}`);
         emitProgress({ status: 'running', segment: i + 1, segments });
         await sdcli({
@@ -255,8 +270,10 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
       fs.mkdirSync(config.outputsDir, { recursive: true });
       const file = `${job.id}.mp4`;
       const dest = path.join(config.outputsDir, file);
-      await concatImpl({ ffmpeg: config.ffmpegPath, inputs: done.map((s) => s.path), output: dest, tmpDir: config.tmpDir });
-      return { seed: done[0].seed, file, url: `/outputs/${file}`, kind: 'video', mime: MIME.mp4, bytes: fs.statSync(dest).size, cinema: { segments, seeds: done.map((s) => s.seed) } };
+      const paths = done.map((s) => s.path);
+      if (blendSeconds > 0) await crossfadeConcatImpl({ ffmpeg: config.ffmpegPath, inputs: paths, segmentDurationSec, blendSeconds, output: dest });
+      else await concatImpl({ ffmpeg: config.ffmpegPath, inputs: paths, output: dest, tmpDir: config.tmpDir });
+      return { seed: done[0].seed, file, url: `/outputs/${file}`, kind: 'video', mime: MIME.mp4, bytes: fs.statSync(dest).size, cinema: { segments, blendSeconds, seeds: done.map((s) => s.seed) } };
     } finally {
       for (const p of [...done.map((s) => s.path), ...frames]) fs.rmSync(p, { force: true });   // keep only the stitched final file (or nothing, on failure/cancel) in outputs
     }

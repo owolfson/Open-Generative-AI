@@ -54,6 +54,7 @@ const num = (v) => (v === '' || v === null || v === undefined || Number.isNaN(Nu
 /** Request body for POST /api/local/jobs. Only sends what the user actually set, so the server's measured-safe defaults apply. */
 export const CINEMA_MIN_SEGMENTS = 2;
 export const CINEMA_MAX_SEGMENTS = 8;
+export const CINEMA_DEFAULT_BLEND_SECONDS = 0.3;   // mirrors the server's own default (service.js) - shown as a placeholder, not forced
 
 export function buildParams({ model, prompt, negative, aspect, device, advanced = {}, imageBase64 }) {
   const p = { model: model.id, prompt: prompt.trim(), aspect_ratio: aspect, device };
@@ -66,7 +67,11 @@ export function buildParams({ model, prompt, negative, aspect, device, advanced 
     if (num(advanced.fps) > 0) p.fps = num(advanced.fps);
     if ((model.needsImage || model.acceptsImage) && imageBase64) p.image_base64 = imageBase64;
     const segments = num(advanced.cinemaSegments);
-    if (model.chainable && segments >= CINEMA_MIN_SEGMENTS) p.cinema = { segments };
+    if (model.chainable && segments >= CINEMA_MIN_SEGMENTS) {
+      p.cinema = { segments };
+      // 0 is a real, meaningful choice (a hard cut) - only omit blendSeconds when the field was left empty, so the server's own default applies.
+      if (advanced.cinemaBlend !== undefined && advanced.cinemaBlend !== '') p.cinema.blendSeconds = num(advanced.cinemaBlend);
+    }
   }
   return p;
 }
@@ -103,6 +108,7 @@ export function entryFromJob(job, models = []) {
     id: job.id, kind: job.kind, url: proxyUrl(job.result.url), prompt: params.prompt || '', model: params.model, modelName: (m && m.name) || params.model,
     device: params.device || '', aspect: params.aspect_ratio || '1:1', seed: job.result.seed,
     seconds: Math.max(0, Math.round(((job.finishedAt || 0) - (job.startedAt || 0)) / 1000)), createdAt: job.finishedAt || Date.now(),
+    cinema: job.result.cinema || null,   // { segments, blendSeconds, seeds } when this is a chained "cinema" video - shown as a badge
   };
 }
 
