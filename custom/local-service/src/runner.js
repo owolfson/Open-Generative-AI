@@ -46,7 +46,7 @@ const EST_VIDEO_SECONDS = 1800;
 // started on a lease that would not outlast them, see covers()).
 const DEFAULT_LEASE_MIN_SECONDS = 3600;
 const DEFAULT_HANDOVER_MS = 500;   // let the queued acquire reach the arbiter before the old lease is released
-const LEASE_MAX_VRAM_GB = 28;   // the arbiter's SAFE_VRAM_BUDGET: a spec's real peak may exceed it (Flux 28.8GB), the lease claim may not
+const DEFAULT_LEASE_MAX_VRAM_GB = 15.5;   // the arbiter's SAFE_VRAM_BUDGET_GB (V100-SXM2-16GB since 2026-10-07; was 28 on the 32GB card): a lease claims the whole card, never more
 // A "cinema" continuation segment (2..N) is only conditioned on a single still frame of the one before it, with no velocity information -
 // sd.cpp's LTX port has no documented multi-frame/motion conditioning to give it that (checked its own docs/ltx2.md: T2V, I2V, FLF2V, spatial
 // upscale, nothing else). A lower --strength keeps the segment closer to a continuation of that still frame instead of a free reinterpretation
@@ -68,6 +68,7 @@ const CINEMA_CONTINUATION_STRENGTH = 0.5;
 function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = runSdCli, mp4Impl = toMp4, lastFrameImpl = lastFrame, concatImpl = concat, crossfadeConcatImpl = crossfadeConcat, log = console, idleReleaseMs = 10_000 }) {
   const lingerMs = config.leaseLingerMs === undefined ? 30_000 : config.leaseLingerMs;
   const leaseMinSeconds = config.leaseMinSeconds === undefined ? DEFAULT_LEASE_MIN_SECONDS : config.leaseMinSeconds;
+  const leaseMaxVramGb = config.leaseMaxVramGb === undefined ? DEFAULT_LEASE_MAX_VRAM_GB : config.leaseMaxVramGb;
   const handoverMs = config.leaseHandoverMs === undefined ? DEFAULT_HANDOVER_MS : config.leaseHandoverMs;
   const parseChunk = loadProgressParser(config.upstreamDir || '');
   const emitProgress = (data) => { if (standin.events && standin.events.emit) standin.events.emit('send', 'local-ai:progress', data); };
@@ -83,7 +84,7 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
   }
 
   // The lease is whole-card, so what matters is time; VRAM is compared as claimed (capped), never as a model's real peak.
-  const covers = (need) => Boolean(held) && Math.min(need.vramGb, LEASE_MAX_VRAM_GB) <= held.vramGb && Date.now() + need.estSeconds * 1000 <= held.deadline;
+  const covers = (need) => Boolean(held) && Math.min(need.vramGb, leaseMaxVramGb) <= held.vramGb && Date.now() + need.estSeconds * 1000 <= held.deadline;
 
   /** Everything decided about a job before any GPU work; throws the job's real error (config, device, missing files). */
   function describe(job) {
@@ -132,7 +133,7 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
     // Only TIME ran short (the lease claims the whole card): hand the V100 over instead of giving it back. The arbiter restores the brain the
     // instant a lease is released, so the replacement is requested FIRST (it queues behind the old lease) and the old one is released after;
     // the arbiter then grants the queued request directly, with no restore/evict cycle in between.
-    const renew = Boolean(held) && Math.min(need.vramGb, LEASE_MAX_VRAM_GB) <= held.vramGb;
+    const renew = Boolean(held) && Math.min(need.vramGb, leaseMaxVramGb) <= held.vramGb;
     const batch = [need];
     let seconds = need.estSeconds;
     for (const next of pending) {
@@ -140,7 +141,7 @@ function createRunner({ config, standin, acquireImpl = acquireLease, sdcli = run
       if (!n || seconds + n.estSeconds > MAX_EST_SECONDS) break;
       batch.push(n); seconds += n.estSeconds;
     }
-    const vramGb = Math.min(LEASE_MAX_VRAM_GB, Math.max(config.sdcppVramGb, ...Object.values(SPECS).map((spec) => spec.vramGb), ...batch.map((n) => n.vramGb)));
+    const vramGb = Math.min(leaseMaxVramGb, Math.max(config.sdcppVramGb, ...Object.values(SPECS).map((spec) => spec.vramGb), ...batch.map((n) => n.vramGb)));
     const queued = batch.length - 1;
     seconds = Math.min(Math.max(seconds, leaseMinSeconds), MAX_EST_SECONDS);
     const request = { consumer: config.sdcppConsumer, vramGb, estSeconds: seconds, note: `ogai-local job ${job.id}${queued ? ` (+${queued} queued)` : ''}${renew ? ' (renewal)' : ''}` };

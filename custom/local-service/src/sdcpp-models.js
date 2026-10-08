@@ -11,6 +11,17 @@ const NEG_WAN = "色调艳丽，过曝，静态，细节模糊不清，字幕，
 const str = (v) => String(v);
 const codeError = (code, message) => Object.assign(new Error(message), { code });
 
+// ---- 16GB V100 placement (2026-10-07) ----
+// The V100-SXM2-16GB replaced the dead 32GB card. With all weights resident every big model here needed more than 16GB (32GB-era
+// peaks: Flux 28.8, Wan 27.4, Hunyuan 28.9, Qwen-Image 24.5, LTX 20.7). sd.cpp's own low-VRAM recipe (docs/backend.md, performance.md):
+//   te=cpu         text encoders' params stay in host RAM and are staged to the GPU to run (no F16C here, so CPU compute is not an option)
+//   diffusion=disk diffusion params are re-read from the model file on demand instead of held in RAM. --offload-to-cpu would keep the whole
+//                  model in RAM and has already had sd-cli OOM-killed on this 48GB host; the files sit in page cache anyway.
+//   --max-vram -1  budget = the card's free memory at start minus ~1GiB; a graph that doesn't fit runs in segments (needs the
+//                  model's graph to have cut points; HunyuanVideo's has none, hence its Q8_0 file below).
+// Measured on the 16GB card per spec (peak VRAM, wall time incl. load).
+const FIT_16GB = ['--params-backend', 'te=cpu,diffusion=disk', '--max-vram', '-1'];
+
 // ---- Wan 2.2 (I2V and T2V share everything except the input image) ----
 // sd.cpp's documented quality recipe (10 low-noise + 8 high-noise steps, cfg 3.5 on both). The lightx2v 4-step LoRAs (a "fast" mode)
 // are NOT offered: with these Q4_K_M GGUFs sd-cli aborts while loading the LoRAs in every --lora-apply-mode (auto / at_runtime /
@@ -28,7 +39,8 @@ const wanArgs = (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '-
   //   (no flag)                all weights on the V100: sampling ok, then the VAE decode fails 'weight preparation' (31.5GB peak)
   //   --offload-to-cpu         worked once for Gemini, but it is 23.5GB of shmem: with the other containers the kernel OOM-killed sd-cli
   //   --max-vram 22            fails in the diffusion ('wan.blocks.23 failed during weight preparation');  --backend te=cpu: SIGSEGV
-  '--params-backend', 'te=cpu', '--vae-tiling'];
+  // 16GB card (2026-10-07), FIT_16GB: T2V peak 11.0GB / 247s, I2V peak 11.1GB / 263s (640x368, 33 frames, 4+4 steps).
+  '--vae-tiling', ...FIT_16GB];
 
 
 // ---- LTX-2.3 hard limits ----
@@ -100,24 +112,24 @@ const SPECS = {
     build: (p, f) => ['--diffusion-model', f.diffusion, '--llm', f.llm, '--vae', f.vae, '--sampling-method', 'euler', '--diffusion-fa', ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
   },
   'wan2gp:flux-dev': {
-    id: 'wan2gp:flux-dev', kind: 'image', ext: 'png', vramGb: 29,   // measured peak 28.8GB (1024x1024: 22.8GB while sampling, +6GB in the VAE decode)
+    id: 'wan2gp:flux-dev', kind: 'image', ext: 'png', vramGb: 14,   // 16GB card: peak 13.5GB, 141s at 1024x1024 / 20 steps (32GB card, all resident: 28.8GB, 160s)
     files: { diffusion: 'flux1-dev-Q8_0.gguf', vae: 'ae.sft.safetensors', clip_l: 'clip_l.safetensors', t5xxl: 't5xxl_fp16.safetensors' },
     dims: IMG_1MP, limits: LIMITS_IMAGE_1MP,
     defaults: () => ({ width: 1024, height: 1024, steps: 20, cfg_scale: 1 }),
-    // No --clip-on-cpu: this host has no F16C, so fp16 text encoding on the CPU is very slow. The V100 has room for T5 on the GPU.
+    // No --clip-on-cpu: this host has no F16C, so fp16 text encoding on the CPU is very slow. T5 runs on the GPU (params staged from RAM).
     build: (p, f) => ['--diffusion-model', f.diffusion, '--vae', f.vae, '--clip_l', f.clip_l, '--t5xxl', f.t5xxl,
-      '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
+      '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', ...(p.negative_prompt ? ['-n', p.negative_prompt] : []), ...FIT_16GB],
   },
   'wan2gp:qwen-image': {
-    id: 'wan2gp:qwen-image', kind: 'image', ext: 'png', vramGb: 25,   // measured peak 24.5GB with --vae-tiling
+    id: 'wan2gp:qwen-image', kind: 'image', ext: 'png', vramGb: 15.5,   // 16GB card: peak 15.5GB (the whole budget, segmented), 286s at 1024x1024 / 20 steps (32GB card: 24.5GB, 187s)
     files: { diffusion: 'qwen-image-2512-Q6_K.gguf', vae: 'qwen_image_vae.safetensors', llm: 'qwen_2.5_vl_7b_fp8_scaled.safetensors' },
     dims: IMG_1MP, limits: LIMITS_IMAGE_1MP,
     defaults: () => ({ width: 1024, height: 1024, steps: 20, cfg_scale: 2.5, flow_shift: 3 }),
     build: (p, f) => ['--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm,
-      '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', '--flow-shift', str(p.flow_shift), ...(p.negative_prompt ? ['-n', p.negative_prompt] : [])],
+      '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', '--flow-shift', str(p.flow_shift), ...(p.negative_prompt ? ['-n', p.negative_prompt] : []), ...FIT_16GB],
   },
   'wan2gp:wan22-i2v': {
-    id: 'wan2gp:wan22-i2v', kind: 'video', ext: 'avi', vramGb: 28, needsImage: true,   // vramGb: measured peak 27.4GB
+    id: 'wan2gp:wan22-i2v', kind: 'video', ext: 'avi', vramGb: 11.5, needsImage: true,   // 16GB card: measured peak 11.1GB (32GB card, te=cpu only: 27.4GB)
     files: {
       diffusion: 'Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
@@ -127,7 +139,7 @@ const SPECS = {
     build: (p, f) => [...wanArgs(p, f), '-i', p.init_image],
   },
   'wan2gp:wan22-t2v': {
-    id: 'wan2gp:wan22-t2v', kind: 'video', ext: 'avi', vramGb: 28,   // same footprint class as I2V (no image-encode step); re-measure if it ever runs near the limit
+    id: 'wan2gp:wan22-t2v', kind: 'video', ext: 'avi', vramGb: 11.5,   // 16GB card: measured peak 11.0GB
     files: {
       diffusion: 'Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: 'Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf',
       vae: 'Wan2_1_VAE_bf16.safetensors', t5xxl: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
@@ -139,24 +151,28 @@ const SPECS = {
   'wan2gp:hunyuan-video': {
     // HunyuanVideo 1.5 (8.3B), the recipe from sd.cpp's docs/hunyuan_video.md: Qwen2.5-VL is the main text encoder (--llm), ByT5 the
     // glyph encoder (--t5xxl). 480p text-to-video, fp16. The text encoders' params live in host RAM (te=cpu), the diffusion model + VAE on the GPU.
-    id: 'wan2gp:hunyuan-video', kind: 'video', ext: 'avi', vramGb: 28,   // provisional: measured on the V100, see the catalog note
-    files: { diffusion: 'hunyuanvideo1.5_480p_t2v_fp16.safetensors', vae: 'hunyuanvideo15_vae_fp16.safetensors', llm: 'qwen_2.5_vl_7b_fp8_scaled.safetensors', t5xxl: 'byt5_small_glyphxl_fp16.safetensors' },
+    id: 'wan2gp:hunyuan-video', kind: 'video', ext: 'avi', vramGb: 10,   // 16GB card, Q8_0: peak 9.8GB, 213s (640x368, 33 frames, 12 steps); 30 steps ~275s
+    // 2026-10-07: the fp16 diffusion file (16.9GB) can't run on the 16GB card - its graph has no cut points, so sd.cpp must place all of it at
+    // once ('cannot make enough memory available ... need 16891 MB'). Converted ONCE to Q8_0 (9.0GB, near-lossless) with
+    // `sd-cli -M convert --diffusion-model hunyuanvideo1.5_480p_t2v_fp16.safetensors -o hunyuanvideo1.5_480p_t2v-Q8_0.gguf --type q8_0` (142s, CPU).
+    files: { diffusion: 'hunyuanvideo1.5_480p_t2v-Q8_0.gguf', vae: 'hunyuanvideo15_vae_fp16.safetensors', llm: 'qwen_2.5_vl_7b_fp8_scaled.safetensors', t5xxl: 'byt5_small_glyphxl_fp16.safetensors' },
     limits: { ...LIMITS_WAN, maxSteps: 60, why: 'measured at 640x368 x 33 frames, 30 steps' }, frameChoices: [17, 25, 33],   // at 24fps: 0.7s / 1.0s / 1.4s
     defaults: () => ({ width: 640, height: 368, steps: 30, cfg_scale: 6, video_frames: 33, fps: 24 }),
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm, '--t5xxl', f.t5xxl,
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
-      ...(p.negative_prompt ? ['-n', p.negative_prompt] : []), '--params-backend', 'te=cpu',
-      // The default VAE decode needs ~13GB on top of the 16GB model and fails ("cannot make enough memory available") even with sd.cpp's own tiling retry.
-      // Measured on the V100 (4-step runs, 640x368): 17 frames decode with plain --vae-tiling (peak 28.9GB); 33 frames need small spatial tiles + temporal
-      // tiling (peak 19GB, but the decode takes minutes).
-      '--vae-tiling', '--temporal-tiling', '--vae-tile-size', '8x8'],
+      ...(p.negative_prompt ? ['-n', p.negative_prompt] : []), ...FIT_16GB,
+      // VAE decode. NO --temporal-tiling: sd.cpp's temporal tiling of this VAE draws a fine grid/mesh over every frame after the first
+      // temporal chunk (~frame 9 on), whatever the spatial tile size (8x8 and 32x32 both) or step count (12 and 30) - found 2026-10-07 by
+      // looking at the frames; the 32GB-era '8x8 + temporal' setting had the same defect. With the diffusion params evicted before the
+      // decode (FIT_16GB) spatial-only 16x16 tiles decode 33 frames in 9.8GB, clean on every frame (95s decode).
+      '--vae-tiling', '--vae-tile-size', '16x16'],
   },
   'wan2gp:ltx-video': {
     // LTX-2.3 22B distilled as a Q4_K_M GGUF (unsloth), run by sd.cpp exactly as its docs/ltx2.md shows (distilled = 8 steps, cfg 1).
     // Why NOT LTX Desktop: its bf16/int8 pipeline block-cycles 43GB of weights through host RAM and crashed this host repeatedly (and the
     // container is gone). Here the whole 14GB model sits in VRAM and only Gemma's params (7.4GB) live in host RAM (te=cpu, same
     // placement that made Wan/Hunyuan work), so there is no RAM<->VRAM cycling and no 43GB read.
-    id: 'wan2gp:ltx-video', kind: 'video', ext: 'avi', vramGb: 28, acceptsImage: true,   // image optional: text-to-video, or image-to-video when one is given
+    id: 'wan2gp:ltx-video', kind: 'video', ext: 'avi', vramGb: 15.5, acceptsImage: true,   // image optional: text-to-video, or image-to-video when one is given. 16GB card: peak 15.5GB (the whole budget, segmented)
     files: {
       diffusion: 'ltx-2.3-22b-distilled-1.1-Q4_K_M.gguf', vae: 'ltx-2.3-22b-distilled_video_vae.safetensors', audio_vae: 'ltx-2.3-22b-distilled_audio_vae.safetensors',
       connectors: 'ltx-2.3-22b-distilled_embeddings_connectors.safetensors', llm: 'gemma-3-12b-it-qat-UD-Q4_K_XL.gguf',
@@ -167,7 +183,10 @@ const SPECS = {
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--audio-vae', f.audio_vae, '--llm', f.llm, '--embeddings-connectors', f.connectors,
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
       ...(p.init_image ? ['-i', p.init_image] : []), ...(p.negative_prompt ? ['-n', p.negative_prompt] : []),
-      '--params-backend', 'te=cpu', '--vae-tiling'],
+      // 16GB card: 640x352 x 121 frames peak 15.4GB / 250s; 960x544 x 121 (the largest LTX_DIMS allows) peak 15.5GB / 313s
+      // (32GB card: 418s). The plain VAE decode ran out of memory and sd.cpp's own retry with spatial+temporal tiling succeeded,
+      // so temporal tiling is asked for up front.
+      '--vae-tiling', '--temporal-tiling', ...FIT_16GB],
   },
 };
 

@@ -27,6 +27,17 @@ test('specs exist for exactly the three catalog ids we serve, with the right kin
   for (const id of ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v']) assert.ok(getSpec(id).vramGb > 10, id);
 });
 
+test('16GB V100: every V100 model streams (te params in RAM, diffusion params from disk, --max-vram -1) and declares at most the 15.5GB whole-card lease', () => {
+  const files = new Proxy({}, { get: (_, role) => `/m/${String(role)}` });
+  for (const id of ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video']) {
+    const spec = getSpec(id);
+    const args = spec.build({ ...spec.defaults({}), prompt: 'x', seed: 1, init_image: '/m/in.png' }, files);
+    assert.ok(pair(args, '--params-backend', 'te=cpu,diffusion=disk'), id);
+    assert.ok(pair(args, '--max-vram', '-1'), id);
+    assert.ok(spec.vramGb <= 15.5, `${id} declares ${spec.vramGb}GB, more than the 16GB card's lease`);
+  }
+});
+
 test('resolveFiles finds files by basename in nested model dirs across several roots', () => {
   const a = tmp(); const b = tmp();
   touch(a, 'unet/flux1-dev-Q8_0.gguf'); touch(a, 'vae/ae.sft.safetensors');
@@ -97,7 +108,7 @@ test('Wan 2.2 I2V: both experts, sd.cpp quality recipe (10+8 steps, cfg 3.5 both
   assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--flow-shift', 3));
   assert.ok(pair(args, '-W', 640)); assert.ok(pair(args, '-H', 368)); assert.ok(pair(args, '-n', NEG_WAN));
   // memory placement, all measured on this host: T5's params live in RAM (6.4GB), everything else stays on the V100; NOT --offload-to-cpu (23.5GB of shmem, OOM-killed)
-  assert.ok(pair(args, '--params-backend', 'te=cpu')); assert.equal(args.includes('--offload-to-cpu'), false); assert.ok(args.includes('--vae-tiling'));
+  assert.ok(pair(args, '--params-backend', 'te=cpu,diffusion=disk') && pair(args, '--max-vram', '-1')); assert.equal(args.includes('--offload-to-cpu'), false); assert.ok(args.includes('--vae-tiling'));
   assert.ok(args.includes('--diffusion-fa'));
 });
 
@@ -145,14 +156,14 @@ test('every extended model decodes with --vae-tiling (measured: the untiled VAE 
 
 // ---------- text-to-video: Wan 2.2 T2V and HunyuanVideo 1.5 (no input image) ----------
 const T2V_FILES = { diffusion: '/m/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf', high_noise: '/m/Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf', vae: '/m/Wan2_1_VAE_bf16.safetensors', t5xxl: '/m/umt5_xxl_fp8_e4m3fn_scaled.safetensors' };
-const HY_FILES = { diffusion: '/m/hunyuanvideo1.5_480p_t2v_fp16.safetensors', vae: '/m/hunyuanvideo15_vae_fp16.safetensors', llm: '/m/qwen_2.5_vl_7b_fp8_scaled.safetensors', t5xxl: '/m/byt5_small_glyphxl_fp16.safetensors' };
+const HY_FILES = { diffusion: '/m/hunyuanvideo1.5_480p_t2v-Q8_0.gguf', vae: '/m/hunyuanvideo15_vae_fp16.safetensors', llm: '/m/qwen_2.5_vl_7b_fp8_scaled.safetensors', t5xxl: '/m/byt5_small_glyphxl_fp16.safetensors' };
 
 test('text-to-video specs exist: video/avi, NO input image, distinct from image-to-video', () => {
   for (const id of ['wan2gp:wan22-t2v', 'wan2gp:hunyuan-video']) {
     const spec = getSpec(id);
     assert.equal(spec.kind, 'video', id); assert.equal(spec.ext, 'avi', id); assert.ok(!spec.needsImage, id);
     assert.doesNotThrow(() => prepare(spec, { prompt: 'x' }), id);          // no IMAGE_REQUIRED
-    assert.ok(spec.vramGb > 10, id);
+    assert.ok(spec.vramGb >= 10 && spec.vramGb <= 15.5, id);   // a real footprint, inside the 16GB card's lease
   }
   assert.equal(getSpec('wan2gp:wan22-i2v').needsImage, true);
 });
@@ -165,20 +176,20 @@ test('Wan 2.2 T2V: the I2V recipe (both experts, 10+8 steps, cfg 3.5, te params 
   assert.equal(args.includes('-i'), false, 'text-to-video has no init image');
   assert.ok(pair(args, '--steps', 10)); assert.ok(pair(args, '--high-noise-steps', 8)); assert.ok(pair(args, '--cfg-scale', 3.5)); assert.ok(pair(args, '--high-noise-cfg-scale', 3.5));
   assert.ok(pair(args, '-W', 640)); assert.ok(pair(args, '-H', 368)); assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '-n', NEG_WAN));
-  assert.ok(pair(args, '--params-backend', 'te=cpu')); assert.ok(args.includes('--vae-tiling')); assert.equal(args.includes('--offload-to-cpu'), false); assert.equal(args.includes('--lora-model-dir'), false);
+  assert.ok(pair(args, '--params-backend', 'te=cpu,diffusion=disk') && pair(args, '--max-vram', '-1')); assert.ok(args.includes('--vae-tiling')); assert.equal(args.includes('--offload-to-cpu'), false); assert.equal(args.includes('--lora-model-dir'), false);
   assert.throws(() => prepare(spec, { prompt: 'x', fast: true }), { code: 'FAST_UNAVAILABLE' });
 });
 
 test('HunyuanVideo 1.5: sd.cpp doc recipe (diffusion + vae + Qwen2.5-VL as --llm + ByT5 as --t5xxl, cfg 6, euler, fa, tiling), single expert, no LoRA', () => {
   const spec = getSpec('wan2gp:hunyuan-video');
-  assert.deepEqual(Object.values(spec.files).sort(), ['byt5_small_glyphxl_fp16.safetensors', 'hunyuanvideo1.5_480p_t2v_fp16.safetensors', 'hunyuanvideo15_vae_fp16.safetensors', 'qwen_2.5_vl_7b_fp8_scaled.safetensors']);
+  assert.deepEqual(Object.values(spec.files).sort(), ['byt5_small_glyphxl_fp16.safetensors', 'hunyuanvideo1.5_480p_t2v-Q8_0.gguf', 'hunyuanvideo15_vae_fp16.safetensors', 'qwen_2.5_vl_7b_fp8_scaled.safetensors']);
   const args = buildArgs(spec, prepare(spec, { prompt: 'a lovely cat', seed: 5 }), HY_FILES, '/o.avi');
   assert.ok(pair(args, '-M', 'vid_gen')); assert.ok(pair(args, '--diffusion-model', HY_FILES.diffusion)); assert.ok(pair(args, '--vae', HY_FILES.vae));
   assert.ok(pair(args, '--llm', HY_FILES.llm)); assert.ok(pair(args, '--t5xxl', HY_FILES.t5xxl));
   assert.ok(pair(args, '--cfg-scale', 6)); assert.ok(pair(args, '--sampling-method', 'euler')); assert.ok(args.includes('--diffusion-fa')); assert.ok(args.includes('--vae-tiling'));
-  assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--params-backend', 'te=cpu'));
-  // measured on the V100: the untiled/default-tiled VAE decode needs 13GB beside the 16GB model and fails; small spatial tiles + temporal tiling decode 33 frames in ~19GB
-  assert.ok(args.includes('--temporal-tiling')); assert.ok(pair(args, '--vae-tile-size', '8x8'));
+  assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--params-backend', 'te=cpu,diffusion=disk') && pair(args, '--max-vram', '-1'));
+  // 16GB card: spatial-only 16x16 tiles decode 33 frames in 9.8GB; temporal tiling draws a grid over every frame after the first chunk, so it must stay off
+  assert.equal(args.includes('--temporal-tiling'), false); assert.ok(args.includes('--vae-tiling')); assert.ok(pair(args, '--vae-tile-size', '16x16'));
   assert.equal(args.includes('--high-noise-diffusion-model'), false); assert.equal(args.includes('-i'), false);
 });
 
@@ -193,7 +204,7 @@ test('LTX-2.3 distilled: sd.cpp recipe (8 steps, cfg 1, euler, fa), text encoder
   assert.ok(pair(t2v, '-M', 'vid_gen')); assert.ok(pair(t2v, '--diffusion-model', LTX_FILES.diffusion)); assert.ok(pair(t2v, '--vae', LTX_FILES.vae)); assert.ok(pair(t2v, '--audio-vae', LTX_FILES.audio_vae));
   assert.ok(pair(t2v, '--llm', LTX_FILES.llm)); assert.ok(pair(t2v, '--embeddings-connectors', LTX_FILES.connectors));
   assert.ok(pair(t2v, '--steps', 8)); assert.ok(pair(t2v, '--cfg-scale', 1)); assert.ok(pair(t2v, '--sampling-method', 'euler')); assert.ok(t2v.includes('--diffusion-fa'));
-  assert.ok(pair(t2v, '--fps', 24)); assert.ok(pair(t2v, '--params-backend', 'te=cpu')); assert.ok(t2v.includes('--vae-tiling')); assert.equal(t2v.includes('--offload-to-cpu'), false);
+  assert.ok(pair(t2v, '--fps', 24)); assert.ok(pair(t2v, '--params-backend', 'te=cpu,diffusion=disk') && pair(t2v, '--max-vram', '-1')); assert.ok(t2v.includes('--vae-tiling')); assert.equal(t2v.includes('--offload-to-cpu'), false);
   assert.equal(t2v.includes('-i'), false, 'text-to-video without an image');
   const i2v = buildArgs(spec, prepare(spec, { prompt: 'a lovely cat', init_image: '/tmp/in.png' }), LTX_FILES, '/o.avi');
   assert.ok(pair(i2v, '-i', '/tmp/in.png'), 'the same model animates an image when one is given');

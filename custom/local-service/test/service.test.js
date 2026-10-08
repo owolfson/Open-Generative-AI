@@ -51,7 +51,7 @@ test('catalogPayload tells agents which extended models are runnable right now (
   const svc = createService({ standin, queue: new JobQueue({ run: async () => ({}) }), config: { modelDirs: [dir] } });
   const byId = Object.fromEntries((await svc.catalogPayload()).models.map((m) => [m.id, m]));
   assert.equal(byId['wan2gp:flux-dev'].filesPresent, true);
-  assert.equal(byId['wan2gp:flux-dev'].vramGb, 29);   // measured peak on the V100
+  assert.equal(byId['wan2gp:flux-dev'].vramGb, 14);   // measured peak on the 16GB V100 (2026-10-07)
   assert.equal(byId['wan2gp:qwen-image'].filesPresent, false);
   assert.equal(byId['wan2gp:wan22-i2v'].filesPresent, false);
   assert.equal(byId['wan2gp:wan22-i2v'].needsImage, true); assert.equal(byId['wan2gp:wan22-t2v'].needsImage, false); assert.equal(byId['wan2gp:hunyuan-video'].needsImage, false);   // the GUI shows the image picker only when needed

@@ -25,6 +25,7 @@ function loadConfig(env = process.env) {
     arbiterUrl: (env.OGAI_ARBITER_URL || '').replace(/\/+$/, ''),
     sdcppConsumer: (env.OGAI_SDCPP_CONSUMER || 'ogai-local').toLowerCase(),
     sdcppVramGb: Number(env.OGAI_SDCPP_VRAM_GB || 10),
+    leaseMaxVramGb: Number(env.OGAI_LEASE_MAX_VRAM_GB || 15.5),   // = the arbiter's SAFE_VRAM_BUDGET_GB (16GB V100); a V100 lease claims the whole card
     deviceIndexV100: Number(env.OGAI_DEVICE_INDEX_V100 ?? 0),
     deviceIndex1080: Number(env.OGAI_DEVICE_INDEX_1080 ?? 1),
     muapiKeyFile: env.MUAPI_KEY_FILE || path.join(dataDir, '.muapi-key'),

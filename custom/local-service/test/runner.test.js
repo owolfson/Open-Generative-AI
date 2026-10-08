@@ -44,7 +44,7 @@ test('V100 job: takes an arbiter lease, pins CUDA device 0, persists the PNG', a
   const cfg = config();
   const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, log: quiet });
   const out = await r.run(job({ params: { model: 'z-image-turbo', prompt: 'a cat', device: 'v100' } }), ctx());
-  assert.deepEqual(gate.calls, [{ consumer: 'ogai-local', vramGb: 28, estSeconds: 3600, note: 'ogai-local job job1' }]);   // whole-card lease: capped at the arbiter's 28GB budget, 1h window
+  assert.deepEqual(gate.calls, [{ consumer: 'ogai-local', vramGb: 15.5, estSeconds: 3600, note: 'ogai-local job job1' }]);   // whole-card lease: capped at the arbiter's 15.5GB budget, 1h window
   assert.equal(standin.envAtGenerate, '0');
   assert.equal(out.seed, 7);
   assert.equal(out.file, 'job1.png');
@@ -151,7 +151,7 @@ test('Flux on the V100: leases the model\'s own VRAM, runs sd-cli with the right
   const cfg = config({ modelDirs: [modelDir(FLUX_FILES)] });
   const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: sd, log: quiet });
   const out = await r.run(job({ params: { model: 'wan2gp:flux-dev', prompt: 'a cat', device: 'v100', seed: 5 } }), ctx());
-  assert.equal(gate.calls[0].vramGb, 28);   // the lease claims the whole card (capped at the arbiter's 28GB budget), not just this model's footprint
+  assert.equal(gate.calls[0].vramGb, 15.5);   // the lease claims the whole card (capped at the arbiter's 15.5GB budget), not just this model's footprint
   assert.equal(gate.calls[0].consumer, 'ogai-local');
   assert.equal(gate.calls[0].estSeconds, 3600);
   const call = sd.calls[0];
@@ -179,7 +179,7 @@ test('video model: avi artifact with kind video, a longer lease estimate, and no
   const cfg = config({ modelDirs: [modelDir(WAN_FILES)] });
   const r = createRunner({ config: cfg, standin, acquireImpl: gate.acquire, sdcli: sd, log: quiet });
   const out = await r.run(job({ params: { model: 'wan2gp:wan22-i2v', prompt: 'it moves', device: 'v100', init_image: '/tmp/in.png', seed: 9 } }), ctx());
-  assert.equal(gate.calls[0].vramGb, 28);
+  assert.equal(gate.calls[0].vramGb, 15.5);
   assert.equal(gate.calls[0].estSeconds, 3600);
   assert.ok(sd.calls[0].args.includes('vid_gen'));
   assert.deepEqual({ file: out.file, url: out.url, kind: out.kind, mime: out.mime, seed: out.seed }, { file: 'job1.avi', url: '/outputs/job1.avi', kind: 'video', mime: 'video/x-msvideo', seed: 9 });
@@ -226,7 +226,7 @@ test('two queued V100 jobs share ONE lease sized for the whole batch (the brain 
   assert.equal(gate.calls.length, 1);
   assert.equal(gate.releases, 1);
   assert.equal(gate.calls[0].estSeconds, 3600);     // never less than the 1h window, so later arrivals can join
-  assert.equal(gate.calls[0].vramGb, 28);           // a V100 lease claims the whole card
+  assert.equal(gate.calls[0].vramGb, 15.5);           // a V100 lease claims the whole card
   assert.match(gate.calls[0].note, /\(\+1 queued\)/);
 });
 
@@ -357,7 +357,7 @@ test('a lease claims the biggest V100 model footprint even for a small job, so a
   const b = submit(queue, { model: 'wan2gp:qwen-image', prompt: 'x', device: 'v100' });   // ...when a 24GB job arrives
   hold.resolve();
   await done(queue, a, b);
-  assert.equal(gate.calls[0].vramGb, 28);
+  assert.equal(gate.calls[0].vramGb, 15.5);
   assert.equal(gate.calls.length, 1, 'one lease covers both');
   assert.equal(gate.releases, 1);
 });
