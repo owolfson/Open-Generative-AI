@@ -37,7 +37,7 @@ test('boots for real: health, auth, 13-model catalog, MCP handshake, GPU jobs re
 
     const { models, excluded } = await (await fetch(`${base}/api/local/catalog`, { headers: auth })).json();
     assert.equal(models.length, 13);
-    assert.equal(models.filter((m) => m.star).length, 4);
+    assert.equal(models.filter((m) => m.star).length, 5);
     assert.ok(excluded.length >= 2);
 
     const init = await (await fetch(`${base}/mcp`, { method: 'POST', headers: auth, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) })).json();

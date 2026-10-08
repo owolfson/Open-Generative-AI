@@ -21,7 +21,7 @@ test('drift tripwire: every model upstream ships has a V100 assessment', async (
 
 test('the starred (best) models are exactly the agreed set', () => {
   const stars = catalog.staticCatalog().filter((m) => m.star).map((m) => m.id).sort();
-  assert.deepEqual(stars, ['wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'z-image-turbo']);   // 2026-10-07: Flux.1 Dev demoted to legacy (crosshatch on the V100)
+  assert.deepEqual(stars, ['wan2gp:ltx-2.5', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'z-image-turbo']);   // 2026-10-07: Flux.1 Dev demoted to legacy (crosshatch on the V100); 2026-10-08: LTX-2.5 proven on the 16GB card
 });
 
 test('every starred model is recommended and no supported model is starred', () => {
@@ -36,7 +36,7 @@ test('routes: everything we can serve goes through sd.cpp; only models without w
 
 test('evidence: only models actually run on this box are proven, and provenOn says on which GPU', () => {
   const proven = Object.fromEntries(catalog.staticCatalog().filter((m) => m.evidence === 'proven').map((m) => [m.id, m.provenOn]));
-  assert.deepEqual(proven, { 'dreamshaper-8': ['gtx1080', 'v100'], 'z-image-turbo': ['gtx1080', 'v100'], 'wan2gp:wan22-i2v': ['v100'], 'wan2gp:flux-dev': ['v100'], 'wan2gp:qwen-image': ['v100'], 'realistic-vision-v51': ['gtx1080', 'v100'], 'anything-v5': ['gtx1080', 'v100'], 'stable-diffusion-xl-base': ['v100'], 'wan2gp:wan22-t2v': ['v100'], 'wan2gp:hunyuan-video': ['v100'], 'wan2gp:ltx-video': ['v100'] });   // Wan I2V: job f8e6a6da on the V100; Qwen was proven under ComfyUI, not under this engine; Flux/Qwen here are still untested
+  assert.deepEqual(proven, { 'dreamshaper-8': ['gtx1080', 'v100'], 'z-image-turbo': ['gtx1080', 'v100'], 'wan2gp:wan22-i2v': ['v100'], 'wan2gp:flux-dev': ['v100'], 'wan2gp:qwen-image': ['v100'], 'realistic-vision-v51': ['gtx1080', 'v100'], 'anything-v5': ['gtx1080', 'v100'], 'stable-diffusion-xl-base': ['v100'], 'wan2gp:wan22-t2v': ['v100'], 'wan2gp:hunyuan-video': ['v100'], 'wan2gp:ltx-video': ['v100'], 'wan2gp:ltx-2.5': ['v100'] });   // Wan I2V: job f8e6a6da on the V100; Qwen was proven under ComfyUI, not under this engine; Flux/Qwen here are still untested
   for (const m of catalog.staticCatalog().filter((e) => e.evidence === 'untested')) assert.deepEqual(m.provenOn, [], m.id);
 });
 

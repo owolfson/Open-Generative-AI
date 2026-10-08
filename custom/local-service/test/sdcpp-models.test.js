@@ -33,9 +33,20 @@ test('16GB V100: every V100 model streams (te params in RAM, diffusion params fr
     const spec = getSpec(id);
     const args = spec.build({ ...spec.defaults({}), prompt: 'x', seed: 1, init_image: '/m/in.png' }, files);
     assert.ok(pair(args, '--params-backend', 'te=cpu,diffusion=disk'), id);
-    assert.ok(pair(args, '--max-vram', '-1'), id);
+    if (id !== 'wan2gp:ltx-2.5') assert.ok(pair(args, '--max-vram', '-1'), id);
+    assert.equal(args.filter((a) => a === '--max-vram').length, 1, `${id} passes --max-vram once`);
     assert.ok(spec.vramGb <= 15.5, `${id} declares ${spec.vramGb}GB, more than the 16GB card's lease`);
   }
+});
+
+test('LTX-2.5 runs under a fixed 10GiB budget so its 14GB Gemma-4 encoder is segmented instead of parked whole on the card', () => {
+  // With --max-vram -1 (budget ~14.5GiB) the Q8_0 encoder fit in ONE segment, stayed resident through the text projection and that
+  // step ran the 16GB card out of memory (2026-10-08). Budget 10: peak 13.4-13.6GB, same speed as 12 (12 peaked at 15.6GB).
+  const spec = getSpec('wan2gp:ltx-2.5');
+  const files = new Proxy({}, { get: (_, role) => `/m/${String(role)}` });
+  const args = spec.build({ ...spec.defaults({}), prompt: 'x', seed: 1 }, files);
+  assert.ok(pair(args, '--max-vram', '10'));
+  assert.equal(spec.vramGb, 14);
 });
 
 test('resolveFiles finds files by basename in nested model dirs across several roots', () => {

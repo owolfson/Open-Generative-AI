@@ -198,7 +198,8 @@ const SPECS = {
     // the conv video VAE (the default video VAE is a diffusion decoder sd.cpp does not implement), the audio VAE, and the Gemma 4
     // encoder converted once from bf16 to Q8_0 with `sd-cli -M convert --type q8_0`. Distilled Q4_K_M from vantagewithai/LTX-2.5-GGUF
     // (the GGUF source sd.cpp's docs link). Same 540p-class / 5s limits as LTX-2.3 (ltxCheck).
-    id: 'wan2gp:ltx-2.5', kind: 'video', ext: 'avi', vramGb: 15.5, acceptsImage: true,
+    // 16GB card (2026-10-08): 640x352 x 49 frames = 320s, 960x544 x 121 = 554s, peak 13.4-13.6GB.
+    id: 'wan2gp:ltx-2.5', kind: 'video', ext: 'avi', vramGb: 14, acceptsImage: true,
     files: {
       diffusion: 'ltx-2.5-22b-distilled-transformer-Q4_K_M.gguf', vae: 'ltx-2.5-video-vae-conv-bf16.safetensors',
       audio_vae: 'ltx-2.5-audio-vae-bf16.safetensors', llm: 'gemma4-12b-with-proj-ltx-2.5-Q8_0.gguf',
@@ -209,7 +210,10 @@ const SPECS = {
     build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--audio-vae', f.audio_vae, '--llm', f.llm,
       '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
       ...(p.init_image ? ['-i', p.init_image] : []), ...(p.negative_prompt ? ['-n', p.negative_prompt] : []),
-      '--vae-tiling', '--temporal-tiling', ...FIT_16GB],
+      // A FIXED 10GiB budget, not FIT_16GB's -1: under -1 (~14.5GiB) the 14GB Q8_0 Gemma-4 encoder fits in one segment, stays on the
+      // card through the text projection, and that step runs out of memory (cuMemCreate) before diffusion starts. At 10 the encoder
+      // is segmented and freed (down to 3.3GB) before diffusion; peak 13.4-13.6GB. 12 was no faster and peaked at 15.6GB.
+      '--vae-tiling', '--temporal-tiling', '--params-backend', 'te=cpu,diffusion=disk', '--max-vram', '10'],
   },
 };
 
