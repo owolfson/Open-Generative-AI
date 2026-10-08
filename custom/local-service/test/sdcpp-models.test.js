@@ -29,7 +29,7 @@ test('specs exist for exactly the three catalog ids we serve, with the right kin
 
 test('16GB V100: every V100 model streams (te params in RAM, diffusion params from disk, --max-vram -1) and declares at most the 15.5GB whole-card lease', () => {
   const files = new Proxy({}, { get: (_, role) => `/m/${String(role)}` });
-  for (const id of ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video']) {
+  for (const id of ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'wan2gp:hunyuan-video', 'wan2gp:ltx-video', 'wan2gp:ltx-2.5']) {
     const spec = getSpec(id);
     const args = spec.build({ ...spec.defaults({}), prompt: 'x', seed: 1, init_image: '/m/in.png' }, files);
     assert.ok(pair(args, '--params-backend', 'te=cpu,diffusion=disk'), id);
@@ -189,7 +189,7 @@ test('HunyuanVideo 1.5: sd.cpp doc recipe (diffusion + vae + Qwen2.5-VL as --llm
   assert.ok(pair(args, '--cfg-scale', 6)); assert.ok(pair(args, '--sampling-method', 'euler')); assert.ok(args.includes('--diffusion-fa')); assert.ok(args.includes('--vae-tiling'));
   assert.ok(pair(args, '--video-frames', 33)); assert.ok(pair(args, '--params-backend', 'te=cpu,diffusion=disk') && pair(args, '--max-vram', '-1'));
   // 16GB card: spatial-only 16x16 tiles decode 33 frames in 9.8GB; temporal tiling draws a grid over every frame after the first chunk, so it must stay off
-  assert.equal(args.includes('--temporal-tiling'), false); assert.ok(args.includes('--vae-tiling')); assert.ok(pair(args, '--vae-tile-size', '16x16'));
+  assert.equal(args.includes('--temporal-tiling'), false); assert.ok(args.includes('--vae-tiling')); assert.ok(pair(args, '--vae-tile-size', '256x256'));   // image pixels since sd.cpp master-945
   assert.equal(args.includes('--high-noise-diffusion-model'), false); assert.equal(args.includes('-i'), false);
 });
 

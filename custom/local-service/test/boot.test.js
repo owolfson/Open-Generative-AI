@@ -19,7 +19,7 @@ async function waitFor(url, ms = 8000) {
   }
 }
 
-test('boots for real: health, auth, 12-model catalog, MCP handshake, GPU jobs refused by default', async () => {
+test('boots for real: health, auth, 13-model catalog, MCP handshake, GPU jobs refused by default', async () => {
   const port = await freePort();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ogai-boot-'));
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'index.js')], {
@@ -36,8 +36,8 @@ test('boots for real: health, auth, 12-model catalog, MCP handshake, GPU jobs re
     assert.equal((await fetch(`${base}/api/local/catalog`)).status, 401);
 
     const { models, excluded } = await (await fetch(`${base}/api/local/catalog`, { headers: auth })).json();
-    assert.equal(models.length, 12);
-    assert.equal(models.filter((m) => m.star).length, 5);
+    assert.equal(models.length, 13);
+    assert.equal(models.filter((m) => m.star).length, 4);
     assert.ok(excluded.length >= 2);
 
     const init = await (await fetch(`${base}/mcp`, { method: 'POST', headers: auth, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) })).json();

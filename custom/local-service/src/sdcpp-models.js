@@ -128,6 +128,9 @@ const SPECS = {
     build: (p, f) => ['--diffusion-model', f.diffusion, '--vae', f.vae, '--llm', f.llm,
       '--sampling-method', 'euler', '--diffusion-fa', '--vae-tiling', '--flow-shift', str(p.flow_shift), ...(p.negative_prompt ? ['-n', p.negative_prompt] : []), ...FIT_16GB],
   },
+  // Qwen-Image-2.1 is NOT offered (2026-10-08): on the V100 (sd.cpp master-945) it renders vertical hatching over the whole frame
+  // and green/magenta blobs - with Q8_0 or bf16 weights, flash-attn on/off, prefix cache on/off, cuBLAS forced to fp32, all
+  // weights resident. Same signature as open sd.cpp issue #2078 (T4, also pre-Ampere). Files stay in models/extended/qwen-image-2.1.
   'wan2gp:wan22-i2v': {
     id: 'wan2gp:wan22-i2v', kind: 'video', ext: 'avi', vramGb: 11.5, needsImage: true,   // 16GB card: measured peak 11.1GB (32GB card, te=cpu only: 27.4GB)
     files: {
@@ -164,8 +167,9 @@ const SPECS = {
       // VAE decode. NO --temporal-tiling: sd.cpp's temporal tiling of this VAE draws a fine grid/mesh over every frame after the first
       // temporal chunk (~frame 9 on), whatever the spatial tile size (8x8 and 32x32 both) or step count (12 and 30) - found 2026-10-07 by
       // looking at the frames; the 32GB-era '8x8 + temporal' setting had the same defect. With the diffusion params evicted before the
-      // decode (FIT_16GB) spatial-only 16x16 tiles decode 33 frames in 9.8GB, clean on every frame (95s decode).
-      '--vae-tiling', '--vae-tile-size', '16x16'],
+      // decode (FIT_16GB) spatial-only tiles decode 33 frames in 9.8GB, clean on every frame (95s decode). sd.cpp master-945 (#2059)
+      // measures tiles in IMAGE PIXELS (it was latent cells): 16 latent cells x the VAE's 16x spatial stride = 256x256 px.
+      '--vae-tiling', '--vae-tile-size', '256x256'],
   },
   'wan2gp:ltx-video': {
     // LTX-2.3 22B distilled as a Q4_K_M GGUF (unsloth), run by sd.cpp exactly as its docs/ltx2.md shows (distilled = 8 steps, cfg 1).
@@ -186,6 +190,25 @@ const SPECS = {
       // 16GB card: 640x352 x 121 frames peak 15.4GB / 250s; 960x544 x 121 (the largest LTX_DIMS allows) peak 15.5GB / 313s
       // (32GB card: 418s). The plain VAE decode ran out of memory and sd.cpp's own retry with spatial+temporal tiling succeeded,
       // so temporal tiling is asked for up front.
+      '--vae-tiling', '--temporal-tiling', ...FIT_16GB],
+  },
+  'wan2gp:ltx-2.5': {
+    // LTX-2.5 22B (open weights 2026-08-11): same transformer/VAE family as LTX-2.3 with better motion, a learned keyframe embedding
+    // and a Gemma 4 text encoder that has the text projection built in (so no --embeddings-connectors file). sd.cpp docs/ltx2.md:
+    // the conv video VAE (the default video VAE is a diffusion decoder sd.cpp does not implement), the audio VAE, and the Gemma 4
+    // encoder converted once from bf16 to Q8_0 with `sd-cli -M convert --type q8_0`. Distilled Q4_K_M from vantagewithai/LTX-2.5-GGUF
+    // (the GGUF source sd.cpp's docs link). Same 540p-class / 5s limits as LTX-2.3 (ltxCheck).
+    id: 'wan2gp:ltx-2.5', kind: 'video', ext: 'avi', vramGb: 15.5, acceptsImage: true,
+    files: {
+      diffusion: 'ltx-2.5-22b-distilled-transformer-Q4_K_M.gguf', vae: 'ltx-2.5-video-vae-conv-bf16.safetensors',
+      audio_vae: 'ltx-2.5-audio-vae-bf16.safetensors', llm: 'gemma4-12b-with-proj-ltx-2.5-Q8_0.gguf',
+    },
+    dims: LTX_DIMS,
+    defaults: () => ({ width: 640, height: 352, steps: 8, cfg_scale: 1, video_frames: 49, fps: 24 }),
+    check: ltxCheck, limits: { maxSteps: 30 }, frameChoices: [33, 49, 97, 121],
+    build: (p, f) => ['-M', 'vid_gen', '--diffusion-model', f.diffusion, '--vae', f.vae, '--audio-vae', f.audio_vae, '--llm', f.llm,
+      '--sampling-method', 'euler', '--diffusion-fa', '--video-frames', str(p.video_frames), '--fps', str(p.fps),
+      ...(p.init_image ? ['-i', p.init_image] : []), ...(p.negative_prompt ? ['-n', p.negative_prompt] : []),
       '--vae-tiling', '--temporal-tiling', ...FIT_16GB],
   },
 };

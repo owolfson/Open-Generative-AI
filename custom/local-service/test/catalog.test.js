@@ -21,7 +21,7 @@ test('drift tripwire: every model upstream ships has a V100 assessment', async (
 
 test('the starred (best) models are exactly the agreed set', () => {
   const stars = catalog.staticCatalog().filter((m) => m.star).map((m) => m.id).sort();
-  assert.deepEqual(stars, ['wan2gp:flux-dev', 'wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'z-image-turbo']);
+  assert.deepEqual(stars, ['wan2gp:qwen-image', 'wan2gp:wan22-i2v', 'wan2gp:wan22-t2v', 'z-image-turbo']);   // 2026-10-07: Flux.1 Dev demoted to legacy (crosshatch on the V100)
 });
 
 test('every starred model is recommended and no supported model is starred', () => {

@@ -11,7 +11,7 @@
 #   OGAI_BUILD_JOBS (3)   OGAI_BUILD_DIR (build tree; keep it off docker.img)
 set -euo pipefail
 cd "$(dirname "$0")"
-REF=${1:-master-881-17860c0}
+REF=${1:-master-945-a1ded76}
 . ./lib-env.sh; load_host_env "${OGAI_DATA:-/mnt/user/appdata/open-generative-ai}/deploy.env"   # host-only settings; real env vars win
 IMAGE=${OGAI_BUILD_IMAGE:-nvidia/cuda:12.6.3-devel-ubuntu22.04}
 OUT=$PWD/vendor/sdcpp
